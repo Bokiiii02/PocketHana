@@ -291,6 +291,7 @@ struct Index {
         `:root{--titlebar-h:calc(44px + ${sbh}px)!important}` +
         `.jian-sidebar{padding-top:var(--titlebar-h)!important}` +
         `.sidebar{padding-top:var(--titlebar-h)!important}` +
+        `._sessionPanel{padding-top:${44 + sbh + 8}px!important}` +
         `*::-webkit-scrollbar{width:0!important;height:0!important;display:none!important;background:transparent!important}` +
         `*::-webkit-scrollbar-thumb{background:transparent!important}` +
         `*{scrollbar-width:none!important}` +
