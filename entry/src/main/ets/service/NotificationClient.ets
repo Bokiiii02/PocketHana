@@ -4,6 +4,7 @@
  * 说明：App 长时间后台时 WebSocket 可能被系统挂起（鸿蒙后台限制），前台/短后台有效
  */
 import { webSocket, http } from '@kit.NetworkKit';
+import { webview } from '@kit.ArkWeb';
 import { notificationManager } from '@kit.NotificationKit';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
@@ -30,10 +31,15 @@ export class NotificationClient {
       return true;
     }
     try {
-      // 拿 ws-ticket
+      // 拿 ws-ticket（需带登录 Cookie）
       const ticketUrl: string = baseUrl.replace(/\/mobile\/?$/, '') + '/api/ws-ticket';
+      const cookie: string = webview.WebCookieManager.getCookie(baseUrl);
       const req = http.createHttp();
-      const resp = await req.request(ticketUrl, { method: http.RequestMethod.POST, readTimeout: 10000, connectTimeout: 8000 });
+      const opt: http.HttpRequestOptions = { method: http.RequestMethod.POST, readTimeout: 10000, connectTimeout: 8000 };
+      if (cookie.length > 0) {
+        opt.header = { 'Cookie': cookie };
+      }
+      const resp = await req.request(ticketUrl, opt);
       req.destroy();
       if (resp.responseCode !== 200) {
         hilog.warn(DOMAIN, TAG, 'ws-ticket failed: %{public}d', resp.responseCode);
