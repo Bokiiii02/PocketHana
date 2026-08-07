@@ -61,6 +61,11 @@ struct Index {
     this.startColorWatcher();
   }
 
+  /** 页面每次显示（含从后台回前台、分享拉起）时立即消费分享数据 */
+  onPageShow(): void {
+    this.checkShare();
+  }
+
   aboutToDisappear(): void {
     if (this.netConn !== null) {
       try {
