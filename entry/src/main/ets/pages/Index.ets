@@ -368,34 +368,44 @@ struct Index {
   }
 
   /** 系统分享：从 Preferences 读取分享内容注入页面（文本填入输入框 / 文件走 base64 注入通道） */
+  private shareBusy: boolean = false;
+  private lastShareSeq: number = 0;
+
   private checkShare(): void {
-    if (!this.isChatReady) {
+    if (!this.isChatReady || this.shareBusy) {
       return;
     }
+    this.shareBusy = true;
     readShare(getContext(this)).then((data: SharePayload) => {
-      if (data.text.length === 0 && data.files.length === 0) {
+      if (data.seq === 0 || data.seq === this.lastShareSeq) {
+        this.shareBusy = false;
         return;
       }
-      // 先同步清空（防轮询重复注入），注入失败再写回重试
+      this.lastShareSeq = data.seq;
+      // 同步清空（防重复）+ 注入，失败写回重试
       clearShareSync(getContext(this));
       if (data.text.length > 0) {
-        hilog.info(DOMAIN, TAG, 'share text inject: %{public}s', data.text.slice(0, 50));
+        hilog.info(DOMAIN, TAG, 'share text inject seq=%{public}d', data.seq);
         this.injectTextToEditor(data.text);
+        this.shareBusy = false;
         return;
       }
       if (data.files.length > 0) {
-        hilog.info(DOMAIN, TAG, 'share files inject: %{public}d', data.files.length);
+        hilog.info(DOMAIN, TAG, 'share files inject seq=%{public}d n=%{public}d', data.seq, data.files.length);
         this.injectFilesToPage(data.files, (ok: boolean) => {
+          this.shareBusy = false;
           if (!ok) {
-            // 输入框未就绪：写回数据，下轮重试
             hilog.warn(DOMAIN, TAG, 'inject no input, write back share data');
             writeShareFiles(getContext(this), data.files).catch((err: BusinessError) => {
               hilog.warn(DOMAIN, TAG, 'write back files failed: %{public}s', JSON.stringify(err));
             });
           }
         });
+        return;
       }
+      this.shareBusy = false;
     }).catch((err: BusinessError) => {
+      this.shareBusy = false;
       hilog.warn(DOMAIN, TAG, 'readShare error: %{public}s', JSON.stringify(err));
     });
   }

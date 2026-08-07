@@ -13,6 +13,7 @@ const TAG: string = 'HanakoShare';
 const STORE: string = 'hanako_share';
 const KEY_TEXT: string = 'share_text';
 const KEY_FILES: string = 'share_files';
+const KEY_SEQ: string = 'share_seq';
 
 export class ShareFileItem {
   path: string = '';
@@ -24,6 +25,7 @@ export class ShareFileItem {
 export class SharePayload {
   text: string = '';
   files: ShareFileItem[] = [];
+  seq: number = 0;
 }
 
 /** 写入文本分享 */
@@ -32,6 +34,7 @@ export async function writeShareText(context: Context, text: string): Promise<vo
     const store = await preferences.getPreferences(context, { name: STORE });
     await store.put(KEY_TEXT, text);
     await store.put(KEY_FILES, '');
+    await store.put(KEY_SEQ, Date.now());
     await store.flush();
     hilog.info(DOMAIN, TAG, 'share text written: %{public}s', text.slice(0, 50));
   } catch (e) {
@@ -60,6 +63,7 @@ export async function writeShareFiles(context: Context, items: ShareFileItem[]):
     const store = await preferences.getPreferences(context, { name: STORE });
     await store.put(KEY_TEXT, '');
     await store.put(KEY_FILES, JSON.stringify(saved));
+    await store.put(KEY_SEQ, Date.now());
     await store.flush();
     hilog.info(DOMAIN, TAG, 'share files written: %{public}d', saved.length);
   } catch (e) {
@@ -74,6 +78,7 @@ export function clearShareSync(context: Context): void {
     const filesJson: string = store.getSync(KEY_FILES, '') as string;
     store.putSync(KEY_TEXT, '');
     store.putSync(KEY_FILES, '');
+    store.putSync(KEY_SEQ, 0);
     store.flush().catch((err: Error) => {
       hilog.warn(DOMAIN, TAG, 'clearShareSync flush failed: %{public}s', JSON.stringify(err));
     });
@@ -100,6 +105,7 @@ export async function readShare(context: Context): Promise<SharePayload> {
     const store = await preferences.getPreferences(context, { name: STORE });
     const text: string = (await store.get(KEY_TEXT, '')) as string;
     const filesJson: string = (await store.get(KEY_FILES, '')) as string;
+    payload.seq = (await store.get(KEY_SEQ, 0)) as number;
     if (text.length > 0) {
       payload.text = text;
       hilog.info(DOMAIN, TAG, 'share read text');
