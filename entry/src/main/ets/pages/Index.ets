@@ -322,7 +322,11 @@ struct Index {
         `try{fitInput();new MutationObserver(fitInput).observe(document.body,{childList:true,subtree:true});}catch(e){}` +
         `}` +
         `if(!window.__hanakoDropHandler){window.__hanakoDropHandler=true;` +
-        `window.addEventListener('drop',function(e){try{var dt=e.dataTransfer;if(!dt||!dt.files||!dt.files.length){return;}e.preventDefault();` +
+        `window.addEventListener('drop',function(e){try{var dt=e.dataTransfer;if(!dt){return;}` +
+        `var txt='';try{txt=dt.getData('text/plain')||'';}catch(x){}` +
+        `if(txt.length>0){e.preventDefault();var el=document.querySelector('[contenteditable="true"]');` +
+        `if(el){el.focus();document.execCommand('insertText',false,txt);console.log('[hanako-drop] text injected');}return;}` +
+        `if(!dt.files||!dt.files.length){return;}e.preventDefault();` +
         `var file=dt.files[0];console.log('[hanako-drop] handle '+file.name);` +
         `file.arrayBuffer().then(function(ab){` +
         `var arr=new Uint8Array(ab);var input=document.querySelector('input[type="file"]');` +
