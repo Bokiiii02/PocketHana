@@ -442,7 +442,10 @@ struct Index {
   private injectFileBase64(b64: string, name: string, type: string): void {
     try {
       const script: string =
-        `(()=>{const input=document.querySelector('input[type="file"]');` +
+        `(()=>{var ins=document.querySelectorAll('input[type="file"]');var info=[];` +
+        `for(var i=0;i<ins.length;i++){var el=ins[i];info.push(i+':accept='+(el.getAttribute('accept')||'*')+':class='+((el.className||'').toString().slice(0,40)));}` +
+        `console.log('[hanako-drop] file inputs: '+info.join(' | '));` +
+        `const input=document.querySelector('input[type="file"]');` +
         `if(!input){return;}const bin=atob('${b64}');` +
         `const arr=new Uint8Array(bin.length);for(let i=0;i<bin.length;i++){arr[i]=bin.charCodeAt(i);}` +
         `const file=new File([arr],${JSON.stringify(name)},{type:${JSON.stringify(type)}});` +
