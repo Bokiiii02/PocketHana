@@ -12,6 +12,8 @@ import { hilog } from '@kit.PerformanceAnalysisKit';
 import { window, promptAction } from '@kit.ArkUI';
 import { scanBarcode } from '@kit.ScanKit';
 import { url } from '@kit.ArkTS';
+import { NotificationClient } from '../service/NotificationClient';
+import { ShareBridge } from '../service/ShareBridge';
 
 const DOMAIN: number = 0x0001;
 const TAG: string = 'HanakoShell';
@@ -71,6 +73,7 @@ struct Index {
       this.netConn = null;
     }
     this.stopColorWatcher();
+    NotificationClient.disconnect();
   }
 
   private loadServerUrl(): void {
@@ -239,6 +242,7 @@ struct Index {
     this.colorTimer = setInterval(() => {
       this.readPageBackground();
       this.checkLoggedIn();
+      this.checkShare();
     }, COLOR_POLL_MS);
   }
 
@@ -335,6 +339,25 @@ struct Index {
     this.showSettings = false;
   }
 
+  /** 系统分享：把待分享文本注入页面输入框 */
+  private checkShare(): void {
+    if (ShareBridge.pendingText.length === 0 || !this.isChatReady) {
+      return;
+    }
+    const text: string = ShareBridge.pendingText;
+    ShareBridge.pendingText = '';
+    try {
+      const script: string =
+        `(()=>{const el=document.querySelector('[contenteditable="true"]');if(!el)return;el.focus();` +
+        `document.execCommand('insertText',false,${JSON.stringify(text)});})()`;
+      this.controller.runJavaScript(script).catch((err: BusinessError) => {
+        hilog.warn(DOMAIN, TAG, 'inject share text failed: %{public}s', JSON.stringify(err));
+      });
+    } catch (e) {
+      hilog.warn(DOMAIN, TAG, 'checkShare error: %{public}s', JSON.stringify(e));
+    }
+  }
+
   private reloadPage(): void {
     this.hasError = false;
     this.isLoading = true;
@@ -378,6 +401,8 @@ struct Index {
       hilog.warn(DOMAIN, TAG, 'save prefs failed: %{public}s', JSON.stringify(e));
     }
     this.closeSettingsPanel();
+    // 地址可能变化：断开旧通知连接，新页面加载成功后重建
+    NotificationClient.disconnect();
     this.reloadPage();
   }
 
@@ -500,6 +525,13 @@ struct Index {
           this.injectUiFixes();
           this.readPageBackground();
           this.checkLoggedIn();
+          // 服务器可达：建立通知 WS（后台推送提醒）
+          if (this.currentUrl.length > 0) {
+            NotificationClient.connect(this.currentUrl).then((ok: boolean) => {
+              hilog.info(DOMAIN, TAG, 'notify ws connect: %{public}s', String(ok));
+            });
+          }
+          this.checkShare();
         })
         .onErrorReceive((event) => {
           let code: number = -1;

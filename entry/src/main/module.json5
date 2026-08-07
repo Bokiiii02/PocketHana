@@ -42,6 +42,27 @@
     ],
     "extensionAbilities": [
       {
+        "name": "ShareExtAbility",
+        "srcEntry": "./ets/extensionability/ShareExtAbility.ets",
+        "type": "share",
+        "exported": true,
+        "skills": [
+          {
+            "actions": [
+              "ohos.want.action.sendData"
+            ],
+            "uris": [
+              {
+                "scheme": "file"
+              },
+              {
+                "scheme": "content"
+              }
+            ]
+          }
+        ]
+      },
+      {
         "name": "EntryBackupAbility",
         "srcEntry": "./ets/entrybackupability/EntryBackupAbility.ets",
         "type": "backup",
