@@ -336,7 +336,10 @@ struct Index {
         `if(!dt.files||!dt.files.length){return;}e.preventDefault();` +
         `var file=dt.files[0];console.log('[hanako-drop] handle '+file.name);` +
         `file.arrayBuffer().then(function(ab){` +
-        `var arr=new Uint8Array(ab);var input=document.querySelector('input[type="file"]');` +
+        `var arr=new Uint8Array(ab);` +
+        `var input=document.querySelector('input[type="file"][class*="browser-file-input"]')` +
+        `||document.querySelector('input[type="file"][accept*="image"]')` +
+        `||document.querySelector('input[type="file"]');` +
         `if(!input){console.log('[hanako-drop] no file input');return;}` +
         `var f2=new File([arr],file.name,{type:file.type});var dt2=new DataTransfer();dt2.items.add(f2);` +
         `input.files=dt2.files;input.dispatchEvent(new Event('change',{bubbles:true}));` +
@@ -445,7 +448,9 @@ struct Index {
         `(()=>{var ins=document.querySelectorAll('input[type="file"]');var info=[];` +
         `for(var i=0;i<ins.length;i++){var el=ins[i];info.push(i+':accept='+(el.getAttribute('accept')||'*')+':class='+((el.className||'').toString().slice(0,40)));}` +
         `console.log('[hanako-drop] file inputs: '+info.join(' | '));` +
-        `const input=document.querySelector('input[type="file"]');` +
+        `const input=document.querySelector('input[type="file"][class*="browser-file-input"]')` +
+        `||document.querySelector('input[type="file"][accept*="image"]')` +
+        `||document.querySelector('input[type="file"]');` +
         `if(!input){return;}const bin=atob('${b64}');` +
         `const arr=new Uint8Array(bin.length);for(let i=0;i<bin.length;i++){arr[i]=bin.charCodeAt(i);}` +
         `const file=new File([arr],${JSON.stringify(name)},{type:${JSON.stringify(type)}});` +
