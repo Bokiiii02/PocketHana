@@ -69,6 +69,7 @@ export class NotificationClient {
           if (ev['type'] === 'notification') {
             const title: string = ev['title'] !== undefined ? String(ev['title']) : 'Hanako';
             const body: string = ev['body'] !== undefined ? String(ev['body']) : '有新的消息';
+            hilog.info(DOMAIN, TAG, 'notification event received: %{public}s', body.slice(0, 40));
             NotificationClient.publish(title, body);
           }
         } catch (e) {
@@ -111,6 +112,7 @@ export class NotificationClient {
   private static publish(title: string, body: string): void {
     try {
       notificationManager.isNotificationEnabled().then((enabled: boolean) => {
+        hilog.info(DOMAIN, TAG, 'notification enabled=%{public}s', String(enabled));
         if (!enabled) {
           hilog.warn(DOMAIN, TAG, 'notification disabled by user');
           return;
@@ -126,7 +128,9 @@ export class NotificationClient {
           }
         };
         NotificationClient.notifySeq++;
-        notificationManager.publish(request).catch((err: BusinessError) => {
+        notificationManager.publish(request).then(() => {
+          hilog.info(DOMAIN, TAG, 'notification published: %{public}s', title);
+        }).catch((err: BusinessError) => {
           hilog.warn(DOMAIN, TAG, 'publish failed: %{public}s', JSON.stringify(err));
         });
       }).catch((err: BusinessError) => {
