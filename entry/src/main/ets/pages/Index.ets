@@ -13,7 +13,7 @@ import { window, promptAction } from '@kit.ArkUI';
 import { scanBarcode } from '@kit.ScanKit';
 import { url } from '@kit.ArkTS';
 import { NotificationClient } from '../service/NotificationClient';
-import { ShareBridge, ShareFileData } from '../service/ShareBridge';
+import { readAndClearShare, SharePayload } from '../service/ShareBridge';
 import { toBase64, guessMime } from '../service/ShareUtil';
 import { unifiedDataChannel } from '@kit.ArkData';
 import { fileIo } from '@kit.CoreFileKit';
@@ -359,23 +359,28 @@ struct Index {
     this.showSettings = false;
   }
 
-  /** 系统分享：把待分享内容注入页面（文本填入输入框 / 文件走 base64 注入通道） */
+  /** 系统分享：从 Preferences 读取分享内容注入页面（文本填入输入框 / 文件走 base64 注入通道） */
   private checkShare(): void {
     if (!this.isChatReady) {
       return;
     }
-    if (ShareBridge.pendingFile !== null) {
-      const data: ShareFileData = ShareBridge.pendingFile;
-      ShareBridge.pendingFile = null;
-      hilog.info(DOMAIN, TAG, 'share file inject: %{public}s (%{public}d chars)', data.name, data.b64.length);
-      this.injectFileBase64(data.b64, data.name, data.type);
-      return;
-    }
-    if (ShareBridge.pendingText.length === 0) {
-      return;
-    }
-    const text: string = ShareBridge.pendingText;
-    ShareBridge.pendingText = '';
+    readAndClearShare(getContext(this)).then((data: SharePayload) => {
+      if (data.text.length > 0) {
+        hilog.info(DOMAIN, TAG, 'share text inject: %{public}s', data.text.slice(0, 50));
+        this.injectTextToEditor(data.text);
+        return;
+      }
+      if (data.b64.length > 0) {
+        hilog.info(DOMAIN, TAG, 'share file inject: %{public}s (%{public}d chars)', data.name, data.b64.length);
+        this.injectFileBase64(data.b64, data.name, data.type);
+      }
+    }).catch((err: BusinessError) => {
+      hilog.warn(DOMAIN, TAG, 'readAndClearShare error: %{public}s', JSON.stringify(err));
+    });
+  }
+
+  /** 注入文本到页面输入框 */
+  private injectTextToEditor(text: string): void {
     try {
       const script: string =
         `(()=>{const el=document.querySelector('[contenteditable="true"]');if(!el)return;el.focus();` +

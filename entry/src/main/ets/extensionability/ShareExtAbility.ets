@@ -1,12 +1,12 @@
 /*
  * Hanako 壳 · 系统分享扩展
  * 接收系统分享（图片/文件/文字转图），在扩展进程读文件转 base64，
- * 交由主界面注入对话附件（跨进程读分享 uri 会失去临时授权，故提前读好）
+ * 经 Preferences 传递给主界面注入对话附件（跨进程安全）
  */
 import { ShareExtensionAbility, UIExtensionContentSession, Want } from '@kit.AbilityKit';
 import { fileIo } from '@kit.CoreFileKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
-import { ShareBridge, ShareFileData } from '../service/ShareBridge';
+import { writeShare } from '../service/ShareBridge';
 import { toBase64, guessMime } from '../service/ShareUtil';
 
 const DOMAIN: number = 0x0008;
@@ -23,8 +23,9 @@ export default class ShareExtAbility extends ShareExtensionAbility {
       try {
         const t: string = fileIo.readTextSync(uri);
         if (t.length > 0) {
-          ShareBridge.pendingText = t;
-          hilog.info(DOMAIN, TAG, 'share text received: %{public}s', t.slice(0, 50));
+          writeShare(this.context, t, '', '', '').then(() => {
+            hilog.info(DOMAIN, TAG, 'share text written: %{public}s', t.slice(0, 50));
+          });
         } else {
           this.readFileToBridge(uri);
         }
@@ -43,8 +44,9 @@ export default class ShareExtAbility extends ShareExtensionAbility {
         if (t.length === 0) t = tryGet('share_text');
         if (t.length === 0) t = tryGet('text');
         if (t.length > 0) {
-          ShareBridge.pendingText = t;
-          hilog.info(DOMAIN, TAG, 'share text received (params): %{public}s', t.slice(0, 50));
+          writeShare(this.context, t, '', '', '').then(() => {
+            hilog.info(DOMAIN, TAG, 'share text written (params): %{public}s', t.slice(0, 50));
+          });
         }
       }
     }
@@ -69,12 +71,9 @@ export default class ShareExtAbility extends ShareExtensionAbility {
       fileIo.closeSync(f);
       const b64: string = toBase64(new Uint8Array(buf));
       const name: string = uri.split('/').pop() || 'share';
-      const data: ShareFileData = new ShareFileData();
-      data.b64 = b64;
-      data.name = name;
-      data.type = guessMime(name);
-      ShareBridge.pendingFile = data;
-      hilog.info(DOMAIN, TAG, 'share file read ok: %{public}s (%{public}d bytes)', name, size);
+      writeShare(this.context, '', b64, name, guessMime(name)).then(() => {
+        hilog.info(DOMAIN, TAG, 'share file written: %{public}s (%{public}d bytes)', name, size);
+      });
     } catch (e) {
       hilog.warn(DOMAIN, TAG, 'share file read failed: %{public}s', JSON.stringify(e));
     }
