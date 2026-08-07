@@ -119,6 +119,7 @@ export class NotificationClient {
         }
         const request: notificationManager.NotificationRequest = {
           id: NotificationClient.notifySeq,
+          notificationSlotType: notificationManager.SlotType.SOCIAL_COMMUNICATION,
           content: {
             notificationContentType: notificationManager.ContentType.NOTIFICATION_CONTENT_BASIC_TEXT,
             normal: {
