@@ -45,12 +45,12 @@
               {
                 "scheme": "file",
                 "utd": "general.image",
-                "maxFileSupported": 1
+                "maxFileSupported": 9
               },
               {
                 "scheme": "file",
                 "utd": "general.object",
-                "maxFileSupported": 1
+                "maxFileSupported": 9
               }
             ]
           }

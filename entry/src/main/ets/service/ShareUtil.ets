@@ -37,3 +37,30 @@ export function guessMime(name: string): string {
   if (n.endsWith('.txt') || n.endsWith('.md')) return 'text/plain';
   return 'application/octet-stream';
 }
+
+/** 文件头 magic bytes 检测真实图片类型（分享 uri 常无扩展名，扩展名推断不可靠） */
+export function detectImageType(bytes: Uint8Array): string {
+  if (bytes.length >= 8 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4E && bytes[3] === 0x47) {
+    return 'image/png';
+  }
+  if (bytes.length >= 3 && bytes[0] === 0xFF && bytes[1] === 0xD8 && bytes[2] === 0xFF) {
+    return 'image/jpeg';
+  }
+  if (bytes.length >= 6 && bytes[0] === 0x47 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x38) {
+    return 'image/gif';
+  }
+  if (bytes.length >= 12 && bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46 &&
+    bytes[8] === 0x57 && bytes[9] === 0x45 && bytes[10] === 0x42 && bytes[11] === 0x50) {
+    return 'image/webp';
+  }
+  return '';
+}
+
+/** 按 MIME 补扩展名（文件无扩展名时） */
+export function extForType(type: string): string {
+  if (type === 'image/png') return '.png';
+  if (type === 'image/jpeg') return '.jpg';
+  if (type === 'image/gif') return '.gif';
+  if (type === 'image/webp') return '.webp';
+  return '';
+}

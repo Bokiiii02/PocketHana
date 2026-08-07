@@ -13,7 +13,7 @@ import { window, promptAction } from '@kit.ArkUI';
 import { scanBarcode } from '@kit.ScanKit';
 import { url } from '@kit.ArkTS';
 import { NotificationClient } from '../service/NotificationClient';
-import { readAndClearShare, SharePayload } from '../service/ShareBridge';
+import { readAndClearShare, SharePayload, ShareFileItem } from '../service/ShareBridge';
 import { toBase64, guessMime } from '../service/ShareUtil';
 import { unifiedDataChannel } from '@kit.ArkData';
 import { fileIo } from '@kit.CoreFileKit';
@@ -378,9 +378,9 @@ struct Index {
         this.injectTextToEditor(data.text);
         return;
       }
-      if (data.b64.length > 0) {
-        hilog.info(DOMAIN, TAG, 'share file inject: %{public}s (%{public}d chars)', data.name, data.b64.length);
-        this.injectFileBase64(data.b64, data.name, data.type);
+      if (data.files.length > 0) {
+        hilog.info(DOMAIN, TAG, 'share files inject: %{public}d', data.files.length);
+        this.injectFilesToPage(data.files);
       }
     }).catch((err: BusinessError) => {
       hilog.warn(DOMAIN, TAG, 'readAndClearShare error: %{public}s', JSON.stringify(err));
@@ -435,32 +435,42 @@ struct Index {
       fileIo.closeSync(f2);
       const b64: string = toBase64(new Uint8Array(buf));
       const name: string = uri.split('/').pop() || 'file';
-      this.injectFileBase64(b64, name, guessMime(name));
+      const item: ShareFileItem = new ShareFileItem();
+      item.path = b64;
+      item.name = name;
+      item.type = guessMime(name);
+      const list: ShareFileItem[] = [item];
+      this.injectFilesToPage(list);
     } catch (e) {
       hilog.warn(DOMAIN, TAG, 'dropFileToPage error: %{public}s', JSON.stringify(e));
     }
   }
 
-  /** base64 文件内容注入页面文件输入框 */
-  private injectFileBase64(b64: string, name: string, type: string): void {
+  /** 多文件注入页面附件输入框（一次塞入 DataTransfer 触发 change） */
+  private injectFilesToPage(files: ShareFileItem[]): void {
     try {
+      let payload: string = '';
+      for (let i = 0; i < files.length; i++) {
+        if (i > 0) {
+          payload += ',';
+        }
+        payload += `{b64:${JSON.stringify(files[i].path)},name:${JSON.stringify(files[i].name)},type:${JSON.stringify(files[i].type)}}`;
+      }
       const script: string =
-        `(()=>{var ins=document.querySelectorAll('input[type="file"]');var info=[];` +
-        `for(var i=0;i<ins.length;i++){var el=ins[i];info.push(i+':accept='+(el.getAttribute('accept')||'*')+':class='+((el.className||'').toString().slice(0,40)));}` +
-        `console.log('[hanako-drop] file inputs: '+info.join(' | '));` +
-        `const input=document.querySelector('input[type="file"][class*="browser-file-input"]')` +
+        `(()=>{const input=document.querySelector('input[type="file"][class*="browser-file-input"]')` +
         `||document.querySelector('input[type="file"][accept*="image"]')` +
         `||document.querySelector('input[type="file"]');` +
-        `if(!input){return;}const bin=atob('${b64}');` +
-        `const arr=new Uint8Array(bin.length);for(let i=0;i<bin.length;i++){arr[i]=bin.charCodeAt(i);}` +
-        `const file=new File([arr],${JSON.stringify(name)},{type:${JSON.stringify(type)}});` +
-        `const dt=new DataTransfer();dt.items.add(file);input.files=dt.files;` +
-        `input.dispatchEvent(new Event('change',{bubbles:true}));})()`;
+        `if(!input){return;}const files=[${payload}];` +
+        `const dt=new DataTransfer();` +
+        `for(let i=0;i<files.length;i++){const bin=atob(files[i].b64);` +
+        `const arr=new Uint8Array(bin.length);for(let j=0;j<bin.length;j++){arr[j]=bin.charCodeAt(j);}` +
+        `dt.items.add(new File([arr],files[i].name,{type:files[i].type}));}` +
+        `input.files=dt.files;input.dispatchEvent(new Event('change',{bubbles:true}));})()`;
       this.controller.runJavaScript(script).catch((err: BusinessError) => {
-        hilog.warn(DOMAIN, TAG, 'inject file failed: %{public}s', JSON.stringify(err));
+        hilog.warn(DOMAIN, TAG, 'inject files failed: %{public}s', JSON.stringify(err));
       });
     } catch (e) {
-      hilog.warn(DOMAIN, TAG, 'injectFileBase64 error: %{public}s', JSON.stringify(e));
+      hilog.warn(DOMAIN, TAG, 'injectFilesToPage error: %{public}s', JSON.stringify(e));
     }
   }
 

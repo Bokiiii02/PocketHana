@@ -19,8 +19,8 @@ import { window } from '@kit.ArkUI';
 import { systemShare } from '@kit.ShareKit';
 import { fileIo } from '@kit.CoreFileKit';
 import { BusinessError } from '@kit.BasicServicesKit';
-import { writeShare } from '../service/ShareBridge';
-import { toBase64, guessMime } from '../service/ShareUtil';
+import { writeShareFiles, writeShareText, ShareFileItem } from '../service/ShareBridge';
+import { toBase64, guessMime, detectImageType, extForType } from '../service/ShareUtil';
 
 const DOMAIN = 0x0000;
 const SHARE_DOMAIN = 0x0008;
@@ -54,15 +54,27 @@ export default class EntryAbility extends UIAbility {
       systemShare.getSharedData(want).then((data: systemShare.SharedData) => {
         const records: Array<systemShare.SharedRecord> = data.getRecords();
         hilog.info(SHARE_DOMAIN, SHARE_TAG, 'share records: %{public}d', records.length);
+        const files: ShareFileItem[] = [];
+        let text: string = '';
         for (const rec of records) {
           if (rec.uri !== undefined && rec.uri.length > 0) {
-            this.readShareFile(rec.uri);
-          } else if (rec.content !== undefined && rec.content.length > 0) {
-            const c: string = rec.content;
-            writeShare(this.context, c, '', '', '').then(() => {
-              hilog.info(SHARE_DOMAIN, SHARE_TAG, 'share text written: %{public}s', c.slice(0, 50));
-            });
+            const item: ShareFileItem | null = this.readShareFileItem(rec.uri);
+            if (item !== null) {
+              files.push(item);
+            }
+          } else if (rec.content !== undefined && rec.content.length > 0 && text.length === 0) {
+            text = rec.content;
           }
+        }
+        if (files.length > 0) {
+          writeShareFiles(this.context, files).then(() => {
+            hilog.info(SHARE_DOMAIN, SHARE_TAG, 'share files persisted: %{public}d', files.length);
+          });
+        }
+        if (text.length > 0) {
+          writeShareText(this.context, text).then(() => {
+            hilog.info(SHARE_DOMAIN, SHARE_TAG, 'share text persisted');
+          });
         }
       }).catch((err: BusinessError) => {
         hilog.warn(SHARE_DOMAIN, SHARE_TAG, 'getSharedData failed: %{public}s', JSON.stringify(err));
@@ -72,26 +84,40 @@ export default class EntryAbility extends UIAbility {
     }
   }
 
-  /** 读取分享文件转 base64 写入 Preferences */
-  private readShareFile(uri: string): void {
+  /** 读取分享文件：magic bytes 检测图片类型，base64 暂存 path 字段 */
+  private readShareFileItem(uri: string): ShareFileItem | null {
     try {
       const f = fileIo.openSync(uri);
       const size: number = fileIo.statSync(f.fd).size;
       if (size <= 0 || size > MAX_SHARE_BYTES) {
         fileIo.closeSync(f);
         hilog.warn(SHARE_DOMAIN, SHARE_TAG, 'share file size invalid: %{public}d', size);
-        return;
+        return null;
       }
       const buf = new ArrayBuffer(size);
       fileIo.readSync(f.fd, buf);
       fileIo.closeSync(f);
-      const b64: string = toBase64(new Uint8Array(buf));
-      const name: string = uri.split('/').pop() || 'share';
-      writeShare(this.context, '', b64, name, guessMime(name)).then(() => {
-        hilog.info(SHARE_DOMAIN, SHARE_TAG, 'share file written: %{public}s (%{public}d bytes)', name, size);
-      });
+      const bytes = new Uint8Array(buf);
+      const b64: string = toBase64(bytes);
+      let name: string = uri.split('/').pop() || 'share';
+      let type: string = detectImageType(bytes);
+      if (type.length > 0) {
+        // 图片且无扩展名时补扩展名，确保页面识别为图片显示预览
+        if (name.indexOf('.') === -1) {
+          name = name + extForType(type);
+        }
+      } else {
+        type = guessMime(name);
+      }
+      const item: ShareFileItem = new ShareFileItem();
+      item.path = b64;
+      item.name = name;
+      item.type = type;
+      hilog.info(SHARE_DOMAIN, SHARE_TAG, 'share file read: %{public}s (%{public}d bytes) type=%{public}s', name, size, type);
+      return item;
     } catch (e) {
-      hilog.warn(SHARE_DOMAIN, SHARE_TAG, 'readShareFile failed: %{public}s', JSON.stringify(e));
+      hilog.warn(SHARE_DOMAIN, SHARE_TAG, 'readShareFileItem failed: %{public}s', JSON.stringify(e));
+      return null;
     }
   }
 

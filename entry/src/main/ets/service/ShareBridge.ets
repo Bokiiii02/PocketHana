@@ -1,9 +1,10 @@
 /*
  * Hanako 壳 · 分享桥
- * 用 Preferences 跨进程传递分享内容（UIExtension 可能与主界面不同进程，
- * 模块级静态变量在跨进程场景不可靠，Preferences 基于文件存储，跨进程安全）
+ * 分享内容跨进程传递：base64 写沙箱文件，Preferences 存路径元信息（跨进程安全、支持多文件、避免大字符串）
+ * 主界面消费后清理文件与记录
  */
 import { preferences } from '@kit.ArkData';
+import { fileIo } from '@kit.CoreFileKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 
 const DOMAIN: number = 0x0008;
@@ -11,63 +12,94 @@ const TAG: string = 'HanakoShare';
 
 const STORE: string = 'hanako_share';
 const KEY_TEXT: string = 'share_text';
-const KEY_B64: string = 'share_file_b64';
-const KEY_NAME: string = 'share_file_name';
-const KEY_TYPE: string = 'share_file_type';
+const KEY_FILES: string = 'share_files';
 
-export class ShareBridge {
-  static pendingText: string = '';
-  static pendingFileB64: string = '';
-  static pendingFileName: string = '';
-  static pendingFileType: string = '';
-}
-
-export async function writeShare(context: Context, text: string, b64: string, name: string, type: string): Promise<void> {
-  try {
-    const store = await preferences.getPreferences(context, { name: STORE });
-    await store.put(KEY_TEXT, text);
-    await store.put(KEY_B64, b64);
-    await store.put(KEY_NAME, name);
-    await store.put(KEY_TYPE, type);
-    await store.flush();
-    hilog.info(DOMAIN, TAG, 'share written to prefs: text=%{public}d b64=%{public}d name=%{public}s', text.length, b64.length, name);
-  } catch (e) {
-    hilog.warn(DOMAIN, TAG, 'writeShare failed: %{public}s', JSON.stringify(e));
-  }
-}
-
-export class SharePayload {
-  text: string = '';
-  b64: string = '';
+export class ShareFileItem {
+  path: string = '';
   name: string = '';
   type: string = '';
 }
 
+export class SharePayload {
+  text: string = '';
+  files: ShareFileItem[] = [];
+}
+
+/** 写入文本分享 */
+export async function writeShareText(context: Context, text: string): Promise<void> {
+  try {
+    const store = await preferences.getPreferences(context, { name: STORE });
+    await store.put(KEY_TEXT, text);
+    await store.put(KEY_FILES, '');
+    await store.flush();
+    hilog.info(DOMAIN, TAG, 'share text written: %{public}s', text.slice(0, 50));
+  } catch (e) {
+    hilog.warn(DOMAIN, TAG, 'writeShareText failed: %{public}s', JSON.stringify(e));
+  }
+}
+
+/** 写入多文件分享（base64 落沙箱文件，Preferences 存路径） */
+export async function writeShareFiles(context: Context, items: ShareFileItem[]): Promise<void> {
+  try {
+    const baseDir: string = context.filesDir;
+    const saved: ShareFileItem[] = [];
+    const ts: number = Date.now();
+    for (let i = 0; i < items.length; i++) {
+      const it = items[i];
+      const p: string = `${baseDir}/hanako_share_${ts}_${i}.txt`;
+      const f = fileIo.openSync(p, fileIo.OpenMode.CREATE | fileIo.OpenMode.READ_WRITE | fileIo.OpenMode.TRUNC);
+      fileIo.writeSync(f.fd, it.path); // path 字段暂存 base64 字符串
+      fileIo.closeSync(f);
+      const savedItem: ShareFileItem = new ShareFileItem();
+      savedItem.path = p;
+      savedItem.name = it.name;
+      savedItem.type = it.type;
+      saved.push(savedItem);
+    }
+    const store = await preferences.getPreferences(context, { name: STORE });
+    await store.put(KEY_TEXT, '');
+    await store.put(KEY_FILES, JSON.stringify(saved));
+    await store.flush();
+    hilog.info(DOMAIN, TAG, 'share files written: %{public}d', saved.length);
+  } catch (e) {
+    hilog.warn(DOMAIN, TAG, 'writeShareFiles failed: %{public}s', JSON.stringify(e));
+  }
+}
+
+/** 读取并清理分享内容（base64 从沙箱文件载入） */
 export async function readAndClearShare(context: Context): Promise<SharePayload> {
-  const empty: SharePayload = new SharePayload();
+  const payload: SharePayload = new SharePayload();
   try {
     const store = await preferences.getPreferences(context, { name: STORE });
     const text: string = (await store.get(KEY_TEXT, '')) as string;
-    const b64: string = (await store.get(KEY_B64, '')) as string;
-    const name: string = (await store.get(KEY_NAME, '')) as string;
-    const type: string = (await store.get(KEY_TYPE, '')) as string;
+    const filesJson: string = (await store.get(KEY_FILES, '')) as string;
     await store.put(KEY_TEXT, '');
-    await store.put(KEY_B64, '');
-    await store.put(KEY_NAME, '');
-    await store.put(KEY_TYPE, '');
+    await store.put(KEY_FILES, '');
     await store.flush();
-    if (text.length > 0 || b64.length > 0) {
-      hilog.info(DOMAIN, TAG, 'share read from prefs: text=%{public}d b64=%{public}d name=%{public}s', text.length, b64.length, name);
-      const p: SharePayload = new SharePayload();
-      p.text = text;
-      p.b64 = b64;
-      p.name = name;
-      p.type = type;
-      return p;
+    if (text.length > 0) {
+      payload.text = text;
+      hilog.info(DOMAIN, TAG, 'share read text');
     }
-    return empty;
+    if (filesJson.length > 0) {
+      const list: ShareFileItem[] = JSON.parse(filesJson) as ShareFileItem[];
+      for (const it of list) {
+        try {
+          const b64: string = fileIo.readTextSync(it.path);
+          fileIo.unlinkSync(it.path); // 清理沙箱文件
+          const item: ShareFileItem = new ShareFileItem();
+          item.path = b64; // 载入后 path 字段存 base64
+          item.name = it.name;
+          item.type = it.type;
+          payload.files.push(item);
+        } catch (e) {
+          hilog.warn(DOMAIN, TAG, 'read share file failed: %{public}s', JSON.stringify(e));
+        }
+      }
+      hilog.info(DOMAIN, TAG, 'share read files: %{public}d', payload.files.length);
+    }
+    return payload;
   } catch (e) {
     hilog.warn(DOMAIN, TAG, 'readAndClearShare failed: %{public}s', JSON.stringify(e));
-    return empty;
+    return payload;
   }
 }
