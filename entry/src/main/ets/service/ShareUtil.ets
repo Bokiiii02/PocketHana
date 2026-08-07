@@ -53,6 +53,17 @@ export function detectImageType(bytes: Uint8Array): string {
     bytes[8] === 0x57 && bytes[9] === 0x45 && bytes[10] === 0x42 && bytes[11] === 0x50) {
     return 'image/webp';
   }
+  // BMP
+  if (bytes.length >= 2 && bytes[0] === 0x42 && bytes[1] === 0x4D) {
+    return 'image/bmp';
+  }
+  // HEIF/HEIC（现代手机相机默认格式）
+  if (bytes.length >= 12 && bytes[4] === 0x66 && bytes[5] === 0x74 && bytes[6] === 0x79 && bytes[7] === 0x70) {
+    const brand: string = String.fromCharCode(bytes[8], bytes[9], bytes[10], bytes[11]);
+    if (brand === 'heic' || brand === 'heix' || brand === 'mif1' || brand === 'heif' || brand === 'msf1') {
+      return 'image/heic';
+    }
+  }
   return '';
 }
 
@@ -62,5 +73,7 @@ export function extForType(type: string): string {
   if (type === 'image/jpeg') return '.jpg';
   if (type === 'image/gif') return '.gif';
   if (type === 'image/webp') return '.webp';
+  if (type === 'image/bmp') return '.bmp';
+  if (type === 'image/heic') return '.heic';
   return '';
 }
