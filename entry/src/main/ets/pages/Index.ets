@@ -13,7 +13,7 @@ import { window, promptAction } from '@kit.ArkUI';
 import { scanBarcode } from '@kit.ScanKit';
 import { url } from '@kit.ArkTS';
 import { NotificationClient } from '../service/NotificationClient';
-import { readShare, clearShare, SharePayload, ShareFileItem } from '../service/ShareBridge';
+import { readShare, clearShareSync, writeShareFiles, writeShareText, SharePayload, ShareFileItem } from '../service/ShareBridge';
 import { toBase64, guessMime } from '../service/ShareUtil';
 import { unifiedDataChannel } from '@kit.ArkData';
 import { fileIo } from '@kit.CoreFileKit';
@@ -373,24 +373,25 @@ struct Index {
       return;
     }
     readShare(getContext(this)).then((data: SharePayload) => {
+      if (data.text.length === 0 && data.files.length === 0) {
+        return;
+      }
+      // 先同步清空（防轮询重复注入），注入失败再写回重试
+      clearShareSync(getContext(this));
       if (data.text.length > 0) {
         hilog.info(DOMAIN, TAG, 'share text inject: %{public}s', data.text.slice(0, 50));
         this.injectTextToEditor(data.text);
-        clearShare(getContext(this)).catch((err: BusinessError) => {
-          hilog.warn(DOMAIN, TAG, 'clearShare error: %{public}s', JSON.stringify(err));
-        });
         return;
       }
       if (data.files.length > 0) {
         hilog.info(DOMAIN, TAG, 'share files inject: %{public}d', data.files.length);
         this.injectFilesToPage(data.files, (ok: boolean) => {
-          if (ok) {
-            clearShare(getContext(this)).catch((err: BusinessError) => {
-              hilog.warn(DOMAIN, TAG, 'clearShare error: %{public}s', JSON.stringify(err));
+          if (!ok) {
+            // 输入框未就绪：写回数据，下轮重试
+            hilog.warn(DOMAIN, TAG, 'inject no input, write back share data');
+            writeShareFiles(getContext(this), data.files).catch((err: BusinessError) => {
+              hilog.warn(DOMAIN, TAG, 'write back files failed: %{public}s', JSON.stringify(err));
             });
-          } else {
-            // 输入框未就绪：保留数据，下轮轮询重试
-            hilog.warn(DOMAIN, TAG, 'inject no input, keep share data for retry');
           }
         });
       }

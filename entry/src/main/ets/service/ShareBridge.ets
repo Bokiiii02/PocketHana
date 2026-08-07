@@ -67,6 +67,32 @@ export async function writeShareFiles(context: Context, items: ShareFileItem[]):
   }
 }
 
+/** 同步清空分享记录（putSync 立即生效，防轮询重复注入），flush 后台落盘 */
+export function clearShareSync(context: Context): void {
+  try {
+    const store = preferences.getPreferencesSync(context, { name: STORE });
+    const filesJson: string = store.getSync(KEY_FILES, '') as string;
+    store.putSync(KEY_TEXT, '');
+    store.putSync(KEY_FILES, '');
+    store.flush().catch((err: Error) => {
+      hilog.warn(DOMAIN, TAG, 'clearShareSync flush failed: %{public}s', JSON.stringify(err));
+    });
+    if (filesJson.length > 0) {
+      const list: ShareFileItem[] = JSON.parse(filesJson) as ShareFileItem[];
+      for (const it of list) {
+        try {
+          fileIo.unlinkSync(it.path);
+        } catch (e) {
+          hilog.warn(DOMAIN, TAG, 'unlink share file failed: %{public}s', JSON.stringify(e));
+        }
+      }
+    }
+    hilog.info(DOMAIN, TAG, 'share cleared sync');
+  } catch (e) {
+    hilog.warn(DOMAIN, TAG, 'clearShareSync failed: %{public}s', JSON.stringify(e));
+  }
+}
+
 /** 读取分享内容（只读不清理，注入成功后再 clearShare） */
 export async function readShare(context: Context): Promise<SharePayload> {
   const payload: SharePayload = new SharePayload();
