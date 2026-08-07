@@ -357,9 +357,19 @@ struct Index {
     this.showSettings = false;
   }
 
-  /** 系统分享：把待分享文本注入页面输入框 */
+  /** 系统分享：把待分享内容注入页面（文本填入输入框 / 文件走拖拽注入通道） */
   private checkShare(): void {
-    if (ShareBridge.pendingText.length === 0 || !this.isChatReady) {
+    if (!this.isChatReady) {
+      return;
+    }
+    if (ShareBridge.pendingFileUri.length > 0) {
+      const uri: string = ShareBridge.pendingFileUri;
+      ShareBridge.pendingFileUri = '';
+      hilog.info(DOMAIN, TAG, 'share file -> dropFileToPage: %{public}s', uri);
+      this.dropFileToPage(uri);
+      return;
+    }
+    if (ShareBridge.pendingText.length === 0) {
       return;
     }
     const text: string = ShareBridge.pendingText;
