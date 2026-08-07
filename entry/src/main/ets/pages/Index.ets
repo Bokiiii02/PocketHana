@@ -291,7 +291,6 @@ struct Index {
         `:root{--titlebar-h:calc(44px + ${sbh}px)!important}` +
         `.jian-sidebar{padding-top:var(--titlebar-h)!important}` +
         `.sidebar{padding-top:var(--titlebar-h)!important}` +
-        `._sessionPanel{padding-top:${44 + sbh + 8}px!important}` +
         `*::-webkit-scrollbar{width:0!important;height:0!important;display:none!important;background:transparent!important}` +
         `*::-webkit-scrollbar-thumb{background:transparent!important}` +
         `*{scrollbar-width:none!important}` +
@@ -309,6 +308,8 @@ struct Index {
         `try{fixMeta();new MutationObserver(fixMeta).observe(document.body,{childList:true,subtree:true});}catch(e){}` +
         `const fixHdr=()=>{const hs=document.querySelectorAll('[class*="_workspaceHeader"]');for(const h of hs){if(h.getAttribute('data-hanako-hdr'))continue;h.setAttribute('data-hanako-hdr','1');h.style.setProperty('padding-right','16px','important');}};` +
         `try{fixHdr();new MutationObserver(fixHdr).observe(document.body,{childList:true,subtree:true});}catch(e){}` +
+        `const fixPanel=()=>{const ps=document.querySelectorAll('[class*="_sessionPanel"]');for(const p of ps){if(p.getAttribute('data-hanako-panel'))continue;p.setAttribute('data-hanako-panel','1');p.style.setProperty('padding-top',(44+${sbh}+8)+'px','important');}};` +
+        `try{fixPanel();new MutationObserver(fixPanel).observe(document.body,{childList:true,subtree:true});}catch(e){}` +
         `}` +
         `if(!window.__hanakoFitInit){window.__hanakoFitInit=true;` +
         `const fitInput=()=>{const els=document.querySelectorAll('textarea');for(const el of els){if(el.__hanakoFit)continue;el.__hanakoFit=true;const up=()=>{el.style.height='auto';const h=el.scrollHeight;el.style.height=(h>0?h+2:44)+'px';};el.addEventListener('input',up);el.addEventListener('focus',up);up();}};` +
