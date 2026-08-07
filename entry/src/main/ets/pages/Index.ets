@@ -412,9 +412,13 @@ struct Index {
           hilog.warn(DOMAIN, TAG, 'unrecognized scan content');
           return;
         }
-        // 扫码结果填入输入框，由用户在菜单中确认后保存连接
+        // 地址 origin 变化（且已有地址）：清 cookie，提示重新验证，自动回登录页
+        if (this.currentUrl.length > 0 && !this.isSameOrigin(this.currentUrl, target)) {
+          this.clearCookies();
+          promptAction.showToast({ message: '检测到地址改变，需要重新验证' });
+        }
         this.editUrl = target;
-        promptAction.showToast({ message: '已填入服务器地址，确认后保存连接' });
+        this.saveSettings();
       }).catch((err: BusinessError) => {
         hilog.warn(DOMAIN, TAG, 'scan failed: %{public}s', JSON.stringify(err));
       });
