@@ -328,6 +328,13 @@ struct Index {
         `try{fitInput();new MutationObserver(fitInput).observe(document.body,{childList:true,subtree:true});}catch(e){}` +
         `}` +
         `if(!window.__hanakoDropHandler){window.__hanakoDropHandler=true;` +
+        `try{fetch('/api/models',{credentials:'include'}).then(function(r){return r.json();}).then(function(d){` +
+        `var arr=d&&d.models||(Array.isArray(d)?d:[]);var out=[];for(var i=0;i<arr.length;i++){` +
+        `var m=arr[i]||{};out.push((m.id||m.name||'?')+':input='+JSON.stringify(m.input));}` +
+        `console.log('[hanako-models] '+out.join(' | '));}).catch(function(e){});` +
+        `fetch('/api/models/auxiliary-vision',{credentials:'include'}).then(function(r){return r.json();}).then(function(d){` +
+        `console.log('[hanako-models] aux-vision='+JSON.stringify(d).slice(0,200));}).catch(function(e){});` +
+        `}catch(e){}` +
         `window.addEventListener('drop',function(e){try{var dt=e.dataTransfer;if(!dt){return;}` +
         `var txt='';try{txt=dt.getData('text/plain')||'';}catch(x){}` +
         `if(txt.length>0){e.preventDefault();var el=document.querySelector('[contenteditable="true"]');` +
@@ -657,8 +664,8 @@ struct Index {
         })
         .onConsole((event: OnConsoleEvent) => {
           const msg: string = event.message.getMessage();
-          if (msg.startsWith('[hanako-drop]')) {
-            hilog.info(DOMAIN, TAG, 'web drop probe: %{public}s', msg);
+          if (msg.startsWith('[hanako-drop]') || msg.startsWith('[hanako-models]')) {
+            hilog.info(DOMAIN, TAG, 'web probe: %{public}s', msg);
           } else {
             const lvl: string = String(event.message.getMessageLevel());
             const low: string = msg.toLowerCase();
