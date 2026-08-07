@@ -54,7 +54,12 @@
             "uris": [
               {
                 "scheme": "file",
-                "utd": "general.text",
+                "utd": "general.image",
+                "maxFileSupported": 1
+              },
+              {
+                "scheme": "file",
+                "utd": "general.object",
                 "maxFileSupported": 1
               }
             ]

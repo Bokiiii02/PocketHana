@@ -47,20 +47,9 @@ export default class ShareExtAbility extends ShareExtensionAbility {
         }
       }
     }
-    // 拉起主界面
-    try {
-      this.context.startAbility({
-        bundleName: 'com.boki.hanako.mobile',
-        abilityName: 'EntryAbility'
-      }).then(() => {
-        session.terminateSelf();
-      }).catch((err: Error) => {
-        hilog.warn(DOMAIN, TAG, 'start main ability failed: %{public}s', JSON.stringify(err));
-        session.terminateSelf();
-      });
-    } catch (e) {
-      hilog.warn(DOMAIN, TAG, 'start ability error: %{public}s', JSON.stringify(e));
-      session.terminateSelf();
-    }
+    // 加载中转页（UIExtension 必须加载 UI 会话），由页面拉起主界面并关闭扩展
+    const storage = new LocalStorage();
+    storage.setOrCreate('session', session);
+    session.loadContent('pages/SharePage', storage);
   }
 }

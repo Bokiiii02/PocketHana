@@ -325,7 +325,8 @@ struct Index {
         `window.addEventListener('drop',function(e){try{var dt=e.dataTransfer;if(!dt){return;}` +
         `var txt='';try{txt=dt.getData('text/plain')||'';}catch(x){}` +
         `if(txt.length>0){e.preventDefault();var el=document.querySelector('[contenteditable="true"]');` +
-        `if(el){el.focus();document.execCommand('insertText',false,txt);console.log('[hanako-drop] text injected');}return;}` +
+        `if(el){el.focus();var ok=false;try{ok=document.execCommand('insertText',false,txt);}catch(xx){ok=false;}` +
+        `console.log('[hanako-drop] text len='+txt.length+' exec='+ok);}else{console.log('[hanako-drop] text no editor');}return;}` +
         `if(!dt.files||!dt.files.length){return;}e.preventDefault();` +
         `var file=dt.files[0];console.log('[hanako-drop] handle '+file.name);` +
         `file.arrayBuffer().then(function(ab){` +
