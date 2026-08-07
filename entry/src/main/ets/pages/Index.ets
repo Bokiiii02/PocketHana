@@ -691,7 +691,7 @@ struct Index {
           .onClick(() => {
             this.startScan();
           })
-          TextInput({ text: this.editUrl, placeholder: 'http://192.168.x.x:25860/mobile/' })
+          TextInput({ text: this.editUrl, placeholder: 'http://主机IP:端口/mobile/' })
             .width('100%')
             .height(48)
             .backgroundColor('#ffffff')
