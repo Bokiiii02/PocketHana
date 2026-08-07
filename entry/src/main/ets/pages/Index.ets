@@ -321,6 +321,10 @@ struct Index {
         `const fitInput=()=>{const els=document.querySelectorAll('textarea');for(const el of els){if(el.__hanakoFit)continue;el.__hanakoFit=true;const up=()=>{el.style.height='auto';const h=el.scrollHeight;el.style.height=(h>0?h+2:44)+'px';};el.addEventListener('input',up);el.addEventListener('focus',up);up();}};` +
         `try{fitInput();new MutationObserver(fitInput).observe(document.body,{childList:true,subtree:true});}catch(e){}` +
         `}` +
+        `if(!window.__hanakoDropProbe){window.__hanakoDropProbe=true;` +
+        `window.addEventListener('dragover',function(e){try{var dt=e.dataTransfer;console.log('[hanako-drop] over types='+String(dt?dt.types:''));}catch(x){}});` +
+        `window.addEventListener('drop',function(e){try{var dt=e.dataTransfer;var n=dt?dt.items.length:0;var f=dt?dt.files.length:0;var t=dt?String(dt.types):'';console.log('[hanako-drop] drop items='+n+' files='+f+' types='+t);}catch(x){}});` +
+        `}` +
         `})()`;
       this.controller.runJavaScript(script).catch((err: BusinessError) => {
         hilog.warn(DOMAIN, TAG, 'injectUiFixes failed: %{public}s', JSON.stringify(err));
@@ -603,6 +607,13 @@ struct Index {
           hilog.info(DOMAIN, TAG, 'onPageBegin url=%{public}s', this.currentUrl);
           // 页面开始加载：清错误态，避免 reload 后白条停留在错误状态
           this.hasError = false;
+        })
+        .onConsole((event: OnConsoleEvent) => {
+          const msg: string = event.message.getMessage();
+          if (msg.startsWith('[hanako-drop]')) {
+            hilog.info(DOMAIN, TAG, 'web drop probe: %{public}s', msg);
+          }
+          return false;
         })
         .onPageEnd(() => {
           this.isLoading = false;
