@@ -15,7 +15,7 @@ const TAG: string = 'HanakoShare';
 const MAX_SHARE_BYTES: number = 20 * 1024 * 1024;
 
 export default class ShareExtAbility extends ShareExtensionAbility {
-  onSessionCreate(want: Want, session: UIExtensionContentSession): void {
+  async onSessionCreate(want: Want, session: UIExtensionContentSession): Promise<void> {
     hilog.info(DOMAIN, TAG, 'onSessionCreate, uri=%{public}s', want.uri ?? '');
     const uri: string = want.uri ?? '';
     if (uri.length > 0) {
@@ -23,15 +23,14 @@ export default class ShareExtAbility extends ShareExtensionAbility {
       try {
         const t: string = fileIo.readTextSync(uri);
         if (t.length > 0) {
-          writeShare(this.context, t, '', '', '').then(() => {
-            hilog.info(DOMAIN, TAG, 'share text written: %{public}s', t.slice(0, 50));
-          });
+          await writeShare(this.context, t, '', '', '');
+          hilog.info(DOMAIN, TAG, 'share text written: %{public}s', t.slice(0, 50));
         } else {
-          this.readFileToBridge(uri);
+          await this.readFileToBridge(uri);
         }
       } catch (e) {
         // 非文本：按文件读 base64
-        this.readFileToBridge(uri);
+        await this.readFileToBridge(uri);
       }
     } else {
       // 无 uri 兜底：parameters 里的文本
@@ -44,9 +43,8 @@ export default class ShareExtAbility extends ShareExtensionAbility {
         if (t.length === 0) t = tryGet('share_text');
         if (t.length === 0) t = tryGet('text');
         if (t.length > 0) {
-          writeShare(this.context, t, '', '', '').then(() => {
-            hilog.info(DOMAIN, TAG, 'share text written (params): %{public}s', t.slice(0, 50));
-          });
+          await writeShare(this.context, t, '', '', '');
+          hilog.info(DOMAIN, TAG, 'share text written (params): %{public}s', t.slice(0, 50));
         }
       }
     }
@@ -56,7 +54,7 @@ export default class ShareExtAbility extends ShareExtensionAbility {
     session.loadContent('pages/SharePage', storage);
   }
 
-  private readFileToBridge(uri: string): void {
+  private async readFileToBridge(uri: string): Promise<void> {
     try {
       const f = fileIo.openSync(uri);
       const stat = fileIo.statSync(f.fd);
@@ -71,9 +69,8 @@ export default class ShareExtAbility extends ShareExtensionAbility {
       fileIo.closeSync(f);
       const b64: string = toBase64(new Uint8Array(buf));
       const name: string = uri.split('/').pop() || 'share';
-      writeShare(this.context, '', b64, name, guessMime(name)).then(() => {
-        hilog.info(DOMAIN, TAG, 'share file written: %{public}s (%{public}d bytes)', name, size);
-      });
+      await writeShare(this.context, '', b64, name, guessMime(name));
+      hilog.info(DOMAIN, TAG, 'share file written: %{public}s (%{public}d bytes)', name, size);
     } catch (e) {
       hilog.warn(DOMAIN, TAG, 'share file read failed: %{public}s', JSON.stringify(e));
     }
