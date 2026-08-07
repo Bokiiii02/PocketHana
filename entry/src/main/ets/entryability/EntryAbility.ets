@@ -110,7 +110,7 @@ export default class EntryAbility extends UIAbility {
         type = guessMime(name);
       }
       const item: ShareFileItem = new ShareFileItem();
-      item.path = b64;
+      item.b64 = b64;
       item.name = name;
       item.type = type;
       hilog.info(SHARE_DOMAIN, SHARE_TAG, 'share file read: %{public}s (%{public}d bytes) type=%{public}s', name, size, type);

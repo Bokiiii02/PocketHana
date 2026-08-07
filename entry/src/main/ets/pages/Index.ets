@@ -13,7 +13,7 @@ import { window, promptAction } from '@kit.ArkUI';
 import { scanBarcode } from '@kit.ScanKit';
 import { url } from '@kit.ArkTS';
 import { NotificationClient } from '../service/NotificationClient';
-import { readAndClearShare, SharePayload, ShareFileItem } from '../service/ShareBridge';
+import { readShare, clearShare, SharePayload, ShareFileItem } from '../service/ShareBridge';
 import { toBase64, guessMime } from '../service/ShareUtil';
 import { unifiedDataChannel } from '@kit.ArkData';
 import { fileIo } from '@kit.CoreFileKit';
@@ -372,18 +372,30 @@ struct Index {
     if (!this.isChatReady) {
       return;
     }
-    readAndClearShare(getContext(this)).then((data: SharePayload) => {
+    readShare(getContext(this)).then((data: SharePayload) => {
       if (data.text.length > 0) {
         hilog.info(DOMAIN, TAG, 'share text inject: %{public}s', data.text.slice(0, 50));
         this.injectTextToEditor(data.text);
+        clearShare(getContext(this)).catch((err: BusinessError) => {
+          hilog.warn(DOMAIN, TAG, 'clearShare error: %{public}s', JSON.stringify(err));
+        });
         return;
       }
       if (data.files.length > 0) {
         hilog.info(DOMAIN, TAG, 'share files inject: %{public}d', data.files.length);
-        this.injectFilesToPage(data.files);
+        this.injectFilesToPage(data.files, (ok: boolean) => {
+          if (ok) {
+            clearShare(getContext(this)).catch((err: BusinessError) => {
+              hilog.warn(DOMAIN, TAG, 'clearShare error: %{public}s', JSON.stringify(err));
+            });
+          } else {
+            // 输入框未就绪：保留数据，下轮轮询重试
+            hilog.warn(DOMAIN, TAG, 'inject no input, keep share data for retry');
+          }
+        });
       }
     }).catch((err: BusinessError) => {
-      hilog.warn(DOMAIN, TAG, 'readAndClearShare error: %{public}s', JSON.stringify(err));
+      hilog.warn(DOMAIN, TAG, 'readShare error: %{public}s', JSON.stringify(err));
     });
   }
 
@@ -436,41 +448,46 @@ struct Index {
       const b64: string = toBase64(new Uint8Array(buf));
       const name: string = uri.split('/').pop() || 'file';
       const item: ShareFileItem = new ShareFileItem();
-      item.path = b64;
+      item.b64 = b64;
       item.name = name;
       item.type = guessMime(name);
       const list: ShareFileItem[] = [item];
-      this.injectFilesToPage(list);
+      this.injectFilesToPage(list, () => {
+      });
     } catch (e) {
       hilog.warn(DOMAIN, TAG, 'dropFileToPage error: %{public}s', JSON.stringify(e));
     }
   }
 
-  /** 多文件注入页面附件输入框（一次塞入 DataTransfer 触发 change） */
-  private injectFilesToPage(files: ShareFileItem[]): void {
+  /** 多文件注入页面附件输入框（一次塞入 DataTransfer 触发 change），回调返回是否找到输入框 */
+  private injectFilesToPage(files: ShareFileItem[], done: (ok: boolean) => void): void {
     try {
       let payload: string = '';
       for (let i = 0; i < files.length; i++) {
         if (i > 0) {
           payload += ',';
         }
-        payload += `{b64:${JSON.stringify(files[i].path)},name:${JSON.stringify(files[i].name)},type:${JSON.stringify(files[i].type)}}`;
+        payload += `{b64:${JSON.stringify(files[i].b64)},name:${JSON.stringify(files[i].name)},type:${JSON.stringify(files[i].type)}}`;
       }
       const script: string =
         `(()=>{const input=document.querySelector('input[type="file"][class*="browser-file-input"]')` +
         `||document.querySelector('input[type="file"][accept*="image"]')` +
         `||document.querySelector('input[type="file"]');` +
-        `if(!input){return;}const files=[${payload}];` +
+        `if(!input){return 'noinput';}const files=[${payload}];` +
         `const dt=new DataTransfer();` +
         `for(let i=0;i<files.length;i++){const bin=atob(files[i].b64);` +
         `const arr=new Uint8Array(bin.length);for(let j=0;j<bin.length;j++){arr[j]=bin.charCodeAt(j);}` +
         `dt.items.add(new File([arr],files[i].name,{type:files[i].type}));}` +
-        `input.files=dt.files;input.dispatchEvent(new Event('change',{bubbles:true}));})()`;
-      this.controller.runJavaScript(script).catch((err: BusinessError) => {
+        `input.files=dt.files;input.dispatchEvent(new Event('change',{bubbles:true}));return 'ok';})()`;
+      this.controller.runJavaScript(script).then((res: string) => {
+        done(res === 'ok');
+      }).catch((err: BusinessError) => {
         hilog.warn(DOMAIN, TAG, 'inject files failed: %{public}s', JSON.stringify(err));
+        done(false);
       });
     } catch (e) {
       hilog.warn(DOMAIN, TAG, 'injectFilesToPage error: %{public}s', JSON.stringify(e));
+      done(false);
     }
   }
 

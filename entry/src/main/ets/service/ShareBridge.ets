@@ -18,6 +18,7 @@ export class ShareFileItem {
   path: string = '';
   name: string = '';
   type: string = '';
+  b64: string = '';
 }
 
 export class SharePayload {
@@ -48,7 +49,7 @@ export async function writeShareFiles(context: Context, items: ShareFileItem[]):
       const it = items[i];
       const p: string = `${baseDir}/hanako_share_${ts}_${i}.txt`;
       const f = fileIo.openSync(p, fileIo.OpenMode.CREATE | fileIo.OpenMode.READ_WRITE | fileIo.OpenMode.TRUNC);
-      fileIo.writeSync(f.fd, it.path); // path 字段暂存 base64 字符串
+      fileIo.writeSync(f.fd, it.b64);
       fileIo.closeSync(f);
       const savedItem: ShareFileItem = new ShareFileItem();
       savedItem.path = p;
@@ -66,16 +67,13 @@ export async function writeShareFiles(context: Context, items: ShareFileItem[]):
   }
 }
 
-/** 读取并清理分享内容（base64 从沙箱文件载入） */
-export async function readAndClearShare(context: Context): Promise<SharePayload> {
+/** 读取分享内容（只读不清理，注入成功后再 clearShare） */
+export async function readShare(context: Context): Promise<SharePayload> {
   const payload: SharePayload = new SharePayload();
   try {
     const store = await preferences.getPreferences(context, { name: STORE });
     const text: string = (await store.get(KEY_TEXT, '')) as string;
     const filesJson: string = (await store.get(KEY_FILES, '')) as string;
-    await store.put(KEY_TEXT, '');
-    await store.put(KEY_FILES, '');
-    await store.flush();
     if (text.length > 0) {
       payload.text = text;
       hilog.info(DOMAIN, TAG, 'share read text');
@@ -84,12 +82,11 @@ export async function readAndClearShare(context: Context): Promise<SharePayload>
       const list: ShareFileItem[] = JSON.parse(filesJson) as ShareFileItem[];
       for (const it of list) {
         try {
-          const b64: string = fileIo.readTextSync(it.path);
-          fileIo.unlinkSync(it.path); // 清理沙箱文件
           const item: ShareFileItem = new ShareFileItem();
-          item.path = b64; // 载入后 path 字段存 base64
+          item.path = it.path;
           item.name = it.name;
           item.type = it.type;
+          item.b64 = fileIo.readTextSync(it.path);
           payload.files.push(item);
         } catch (e) {
           hilog.warn(DOMAIN, TAG, 'read share file failed: %{public}s', JSON.stringify(e));
@@ -99,7 +96,31 @@ export async function readAndClearShare(context: Context): Promise<SharePayload>
     }
     return payload;
   } catch (e) {
-    hilog.warn(DOMAIN, TAG, 'readAndClearShare failed: %{public}s', JSON.stringify(e));
+    hilog.warn(DOMAIN, TAG, 'readShare failed: %{public}s', JSON.stringify(e));
     return payload;
+  }
+}
+
+/** 清理分享记录与沙箱文件（注入成功后调用） */
+export async function clearShare(context: Context): Promise<void> {
+  try {
+    const store = await preferences.getPreferences(context, { name: STORE });
+    const filesJson: string = (await store.get(KEY_FILES, '')) as string;
+    await store.put(KEY_TEXT, '');
+    await store.put(KEY_FILES, '');
+    await store.flush();
+    if (filesJson.length > 0) {
+      const list: ShareFileItem[] = JSON.parse(filesJson) as ShareFileItem[];
+      for (const it of list) {
+        try {
+          fileIo.unlinkSync(it.path);
+        } catch (e) {
+          hilog.warn(DOMAIN, TAG, 'unlink share file failed: %{public}s', JSON.stringify(e));
+        }
+      }
+    }
+    hilog.info(DOMAIN, TAG, 'share cleared');
+  } catch (e) {
+    hilog.warn(DOMAIN, TAG, 'clearShare failed: %{public}s', JSON.stringify(e));
   }
 }
