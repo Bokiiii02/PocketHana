@@ -15,8 +15,8 @@ import { url } from '@kit.ArkTS';
 
 const DOMAIN: number = 0x0001;
 const TAG: string = 'HanakoShell';
-// 默认服务器地址（占位示例，发布后请改成你自己的服务器地址）
-const DEFAULT_URL: string = 'http://192.168.1.100:25860/mobile/';
+// 默认服务器地址：空，首次打开引导用户自行设置
+const DEFAULT_URL: string = '';
 const PREFS_NAME: string = 'hanako_mobile';
 const KEY_SERVER_URL: string = 'server_url';
 // onErrorReceive 的 ERR_ABORTED：页面导航被主动中断（如 SPA 路由），不算失败
@@ -348,13 +348,14 @@ struct Index {
   private saveSettings(): void {
     let u: string = this.editUrl.trim();
     if (u.length === 0) {
-      u = DEFAULT_URL;
+      promptAction.showToast({ message: '请输入服务器地址' });
+      return;
     }
     if (!u.startsWith('http://') && !u.startsWith('https://')) {
       u = 'http://' + u;
     }
-    // 地址 origin 变化：清 cookie，提示重新验证，自动回登录页
-    if (!this.isSameOrigin(this.currentUrl, u)) {
+    // 地址 origin 变化（且已有地址）：清 cookie，提示重新验证，自动回登录页
+    if (this.currentUrl.length > 0 && !this.isSameOrigin(this.currentUrl, u)) {
       this.clearCookies();
       promptAction.showToast({ message: '检测到地址改变，需要重新验证' });
     }
@@ -409,8 +410,8 @@ struct Index {
           hilog.warn(DOMAIN, TAG, 'unrecognized scan content');
           return;
         }
-        // 地址 origin 变化：清 cookie，提示重新验证，自动回登录页
-        if (!this.isSameOrigin(this.currentUrl, target)) {
+        // 地址 origin 变化（且已有地址）：清 cookie，提示重新验证，自动回登录页
+        if (this.currentUrl.length > 0 && !this.isSameOrigin(this.currentUrl, target)) {
           this.clearCookies();
           promptAction.showToast({ message: '检测到地址改变，需要重新验证' });
         }
@@ -476,7 +477,7 @@ struct Index {
   build() {
     Stack({ alignContent: Alignment.TopEnd }) {
       // Web 内容层：全屏渲染，顶部横栏由注入 CSS 自行避让状态栏（背景延伸，视觉一体）
-      Web({ src: this.currentUrl, controller: this.controller })
+      Web({ src: this.currentUrl.length > 0 ? this.currentUrl : 'about:blank', controller: this.controller })
         .width('100%')
         .height('100%')
         .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
@@ -522,6 +523,39 @@ struct Index {
             this.isChatReady = false;
           }
         })
+
+      // 首次引导层：未设置服务器地址时显示
+      if (this.currentUrl.length === 0 && !this.hasError) {
+        Column() {
+          Image($r('app.media.startIcon'))
+            .width(96)
+            .height(96)
+            .borderRadius(22)
+          Text('欢迎使用 Hanako')
+            .fontSize(22)
+            .fontWeight(FontWeight.Bold)
+            .fontColor('#3a3226')
+            .margin({ top: 22 })
+          Text('请先设置你的 Hanako 服务器地址')
+            .fontSize(14)
+            .fontColor('#8a7a5c')
+            .margin({ top: 10, bottom: 28 })
+          Button('设置服务器地址')
+            .width(200)
+            .height(46)
+            .fontSize(16)
+            .fontColor('#ffffff')
+            .backgroundColor('#c9a06c')
+            .borderRadius(12)
+            .onClick(() => {
+              this.openSettingsPanel();
+            })
+        }
+        .justifyContent(FlexAlign.Center)
+        .width('100%')
+        .height('100%')
+        .backgroundColor(this.bgColor)
+      }
 
       // 首次连接加载页（图标严格居中，与启动窗口图标位置一致；加载指示固定在图标下方）
       if (this.isLoading && !this.hasError) {
