@@ -412,13 +412,9 @@ struct Index {
           hilog.warn(DOMAIN, TAG, 'unrecognized scan content');
           return;
         }
-        // 地址 origin 变化（且已有地址）：清 cookie，提示重新验证，自动回登录页
-        if (this.currentUrl.length > 0 && !this.isSameOrigin(this.currentUrl, target)) {
-          this.clearCookies();
-          promptAction.showToast({ message: '检测到地址改变，需要重新验证' });
-        }
+        // 扫码结果填入输入框，由用户在菜单中确认后保存连接
         this.editUrl = target;
-        this.saveSettings();
+        promptAction.showToast({ message: '已填入服务器地址，确认后保存连接' });
       }).catch((err: BusinessError) => {
         hilog.warn(DOMAIN, TAG, 'scan failed: %{public}s', JSON.stringify(err));
       });
@@ -698,6 +694,8 @@ struct Index {
             .height(48)
             .backgroundColor('#ffffff')
             .fontSize(16)
+            .defaultFocus(true)
+            .caretPosition(0)
             .onChange((value: string) => {
               this.editUrl = value;
             })
