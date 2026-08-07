@@ -16,8 +16,16 @@
 import { AbilityConstant, ConfigurationConstant, UIAbility, Want } from '@kit.AbilityKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { window } from '@kit.ArkUI';
+import { systemShare } from '@kit.ShareKit';
+import { fileIo } from '@kit.CoreFileKit';
+import { BusinessError } from '@kit.BasicServicesKit';
+import { writeShare } from '../service/ShareBridge';
+import { toBase64, guessMime } from '../service/ShareUtil';
 
 const DOMAIN = 0x0000;
+const SHARE_DOMAIN = 0x0008;
+const SHARE_TAG = 'HanakoShare';
+const MAX_SHARE_BYTES: number = 20 * 1024 * 1024;
 
 export default class EntryAbility extends UIAbility {
   onCreate(want: Want, launchParam: AbilityConstant.LaunchParam): void {
@@ -27,6 +35,64 @@ export default class EntryAbility extends UIAbility {
       hilog.error(DOMAIN, 'testTag', 'Failed to set colorMode. Cause: %{public}s', JSON.stringify(err));
     }
     hilog.info(DOMAIN, 'testTag', '%{public}s', 'Ability onCreate');
+    this.handleShareWant(want, launchParam);
+  }
+
+  /** 系统分享拉起（App 已在运行） */
+  onNewWant(want: Want, launchParam: AbilityConstant.LaunchParam): void {
+    hilog.info(DOMAIN, 'testTag', '%{public}s', 'Ability onNewWant');
+    this.handleShareWant(want, launchParam);
+  }
+
+  /** 判断是否被系统分享拉起，解析分享数据写入 Preferences */
+  private handleShareWant(want: Want, launchParam: AbilityConstant.LaunchParam): void {
+    try {
+      if (launchParam.launchReasonMessage !== 'ReasonMessage_SystemShare') {
+        return;
+      }
+      hilog.info(SHARE_DOMAIN, SHARE_TAG, 'system share launch, want.uri=%{public}s', want.uri ?? '');
+      systemShare.getSharedData(want).then((data: systemShare.SharedData) => {
+        const records: Array<systemShare.SharedRecord> = data.getRecords();
+        hilog.info(SHARE_DOMAIN, SHARE_TAG, 'share records: %{public}d', records.length);
+        for (const rec of records) {
+          if (rec.uri !== undefined && rec.uri.length > 0) {
+            this.readShareFile(rec.uri);
+          } else if (rec.content !== undefined && rec.content.length > 0) {
+            const c: string = rec.content;
+            writeShare(this.context, c, '', '', '').then(() => {
+              hilog.info(SHARE_DOMAIN, SHARE_TAG, 'share text written: %{public}s', c.slice(0, 50));
+            });
+          }
+        }
+      }).catch((err: BusinessError) => {
+        hilog.warn(SHARE_DOMAIN, SHARE_TAG, 'getSharedData failed: %{public}s', JSON.stringify(err));
+      });
+    } catch (e) {
+      hilog.warn(SHARE_DOMAIN, SHARE_TAG, 'handleShareWant error: %{public}s', JSON.stringify(e));
+    }
+  }
+
+  /** 读取分享文件转 base64 写入 Preferences */
+  private readShareFile(uri: string): void {
+    try {
+      const f = fileIo.openSync(uri);
+      const size: number = fileIo.statSync(f.fd).size;
+      if (size <= 0 || size > MAX_SHARE_BYTES) {
+        fileIo.closeSync(f);
+        hilog.warn(SHARE_DOMAIN, SHARE_TAG, 'share file size invalid: %{public}d', size);
+        return;
+      }
+      const buf = new ArrayBuffer(size);
+      fileIo.readSync(f.fd, buf);
+      fileIo.closeSync(f);
+      const b64: string = toBase64(new Uint8Array(buf));
+      const name: string = uri.split('/').pop() || 'share';
+      writeShare(this.context, '', b64, name, guessMime(name)).then(() => {
+        hilog.info(SHARE_DOMAIN, SHARE_TAG, 'share file written: %{public}s (%{public}d bytes)', name, size);
+      });
+    } catch (e) {
+      hilog.warn(SHARE_DOMAIN, SHARE_TAG, 'readShareFile failed: %{public}s', JSON.stringify(e));
+    }
   }
 
   onDestroy(): void {

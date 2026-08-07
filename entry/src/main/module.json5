@@ -36,17 +36,7 @@
             "actions": [
               "ohos.want.action.home"
             ]
-          }
-        ]
-      }
-    ],
-    "extensionAbilities": [
-      {
-        "name": "ShareExtAbility",
-        "srcEntry": "./ets/extensionability/ShareExtAbility.ets",
-        "type": "share",
-        "exported": true,
-        "skills": [
+          },
           {
             "actions": [
               "ohos.want.action.sendData"
@@ -65,7 +55,9 @@
             ]
           }
         ]
-      },
+      }
+    ],
+    "extensionAbilities": [
       {
         "name": "EntryBackupAbility",
         "srcEntry": "./ets/entrybackupability/EntryBackupAbility.ets",
