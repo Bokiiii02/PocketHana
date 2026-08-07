@@ -15,7 +15,8 @@ import { url } from '@kit.ArkTS';
 
 const DOMAIN: number = 0x0001;
 const TAG: string = 'HanakoShell';
-const DEFAULT_URL: string = 'http://172.23.100.249:25860/mobile/';
+// 默认服务器地址（占位示例，发布后请改成你自己的服务器地址）
+const DEFAULT_URL: string = 'http://192.168.1.100:25860/mobile/';
 const PREFS_NAME: string = 'hanako_mobile';
 const KEY_SERVER_URL: string = 'server_url';
 // onErrorReceive 的 ERR_ABORTED：页面导航被主动中断（如 SPA 路由），不算失败
