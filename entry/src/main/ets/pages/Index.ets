@@ -328,6 +328,14 @@ struct Index {
         `try{fitInput();new MutationObserver(fitInput).observe(document.body,{childList:true,subtree:true});}catch(e){}` +
         `}` +
         `if(!window.__hanakoDropHandler){window.__hanakoDropHandler=true;` +
+        `try{import('./app-file-drag-BXCTczfT.js').then(function(m){try{var ki=m.l;` +
+        `console.log('[hanako-drop] Ki test png='+String(ki('test.png'))+' bare='+String(ki('123'))+' jpg='+String(ki('a.jpg')));` +
+        `}catch(e){console.log('[hanako-drop] Ki call err '+String(e));}}).catch(function(e){console.log('[hanako-drop] import err '+String(e));});}catch(e){}` +
+        `try{var of=window.fetch;window.fetch=function(){var url=arguments[0];` +
+        `return of.apply(this,arguments).then(function(res){try{if(String(url).indexOf('upload-blob')>-1){` +
+        `res.clone().json().then(function(d){var u=d&&d.uploads&&d.uploads[0];` +
+        `console.log('[hanako-drop] blob resp name='+((u&&u.name)||'?')+' dest='+((u&&u.dest)||'?'));}).catch(function(){});` +
+        `}}catch(e){}return res;});};}catch(e){}` +
         `try{fetch('/api/models',{credentials:'include'}).then(function(r){return r.json();}).then(function(d){` +
         `var arr=d&&d.models||(Array.isArray(d)?d:[]);var out=[];for(var i=0;i<arr.length;i++){` +
         `var m=arr[i]||{};out.push((m.id||m.name||'?')+':input='+JSON.stringify(m.input));}` +
