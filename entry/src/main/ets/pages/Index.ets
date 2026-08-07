@@ -620,6 +620,15 @@ struct Index {
           const msg: string = event.message.getMessage();
           if (msg.startsWith('[hanako-drop]')) {
             hilog.info(DOMAIN, TAG, 'web drop probe: %{public}s', msg);
+          } else {
+            const lvl: string = String(event.message.getMessageLevel());
+            const low: string = msg.toLowerCase();
+            if (lvl.indexOf('Error') > -1 || lvl.indexOf('Warn') > -1 ||
+              low.indexOf('fail') > -1 || low.indexOf('error') > -1 ||
+              low.indexOf('文件') > -1 || low.indexOf('附件') > -1 ||
+              low.indexOf('upload') > -1 || low.indexOf('attachment') > -1) {
+              hilog.info(DOMAIN, TAG, 'web console: %{public}s', msg.slice(0, 300));
+            }
           }
           return false;
         })
