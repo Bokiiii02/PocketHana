@@ -1,0 +1,56 @@
+{
+  "app": {
+    "signingConfigs": [
+      {
+        "name": "default",
+        "type": "HarmonyOS",
+        "material": {
+          "certpath": "C:\\Users\\Noisy\\.ohos\\config\\default_HanakoMobile_A8NKObHsLVQgBN08xPB2vLk2lwFbZqVntyGFyp6mKqc=.cer",
+          "keyAlias": "debugKey",
+          "keyPassword": "0000001BC671FD2E3C061069167873D8F7AB1EA93681BCE2EAF077055D420B66F06B00F920543979DF5B38",
+          "profile": "C:\\Users\\Noisy\\.ohos\\config\\default_HanakoMobile_A8NKObHsLVQgBN08xPB2vLk2lwFbZqVntyGFyp6mKqc=.p7b",
+          "signAlg": "SHA256withECDSA",
+          "storeFile": "C:\\Users\\Noisy\\.ohos\\config\\default_HanakoMobile_A8NKObHsLVQgBN08xPB2vLk2lwFbZqVntyGFyp6mKqc=.p12",
+          "storePassword": "0000001BB16744F0C6D1035941D864B76C224A327C341E2156F4BE46DCCF1BF844BEAD20F613754BA06FC5"
+        }
+      }
+    ],
+    "products": [
+      {
+        "name": "default",
+        "signingConfig": "default",
+        "targetSdkVersion": "6.1.1(24)",
+        "compatibleSdkVersion": "6.1.1(24)",
+        "runtimeOS": "HarmonyOS",
+        "buildOption": {
+          "strictMode": {
+            "caseSensitiveCheck": true,
+            "useNormalizedOHMUrl": true
+          }
+        }
+      }
+    ],
+    "buildModeSet": [
+      {
+        "name": "debug",
+      },
+      {
+        "name": "release"
+      }
+    ]
+  },
+  "modules": [
+    {
+      "name": "entry",
+      "srcPath": "./entry",
+      "targets": [
+        {
+          "name": "default",
+          "applyToProducts": [
+            "default"
+          ]
+        }
+      ]
+    }
+  ]
+}
