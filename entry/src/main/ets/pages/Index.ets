@@ -13,7 +13,8 @@ import { window, promptAction } from '@kit.ArkUI';
 import { scanBarcode } from '@kit.ScanKit';
 import { url } from '@kit.ArkTS';
 import { NotificationClient } from '../service/NotificationClient';
-import { ShareBridge } from '../service/ShareBridge';
+import { ShareBridge, ShareFileData } from '../service/ShareBridge';
+import { toBase64, guessMime } from '../service/ShareUtil';
 import { unifiedDataChannel } from '@kit.ArkData';
 import { fileIo } from '@kit.CoreFileKit';
 
@@ -358,16 +359,16 @@ struct Index {
     this.showSettings = false;
   }
 
-  /** 系统分享：把待分享内容注入页面（文本填入输入框 / 文件走拖拽注入通道） */
+  /** 系统分享：把待分享内容注入页面（文本填入输入框 / 文件走 base64 注入通道） */
   private checkShare(): void {
     if (!this.isChatReady) {
       return;
     }
-    if (ShareBridge.pendingFileUri.length > 0) {
-      const uri: string = ShareBridge.pendingFileUri;
-      ShareBridge.pendingFileUri = '';
-      hilog.info(DOMAIN, TAG, 'share file -> dropFileToPage: %{public}s', uri);
-      this.dropFileToPage(uri);
+    if (ShareBridge.pendingFile !== null) {
+      const data: ShareFileData = ShareBridge.pendingFile;
+      ShareBridge.pendingFile = null;
+      hilog.info(DOMAIN, TAG, 'share file inject: %{public}s (%{public}d chars)', data.name, data.b64.length);
+      this.injectFileBase64(data.b64, data.name, data.type);
       return;
     }
     if (ShareBridge.pendingText.length === 0) {
@@ -419,10 +420,17 @@ struct Index {
       const buf = new ArrayBuffer(size);
       fileIo.readSync(f2.fd, buf);
       fileIo.closeSync(f2);
-      const bytes = new Uint8Array(buf);
-      const b64: string = this.toBase64(bytes);
+      const b64: string = toBase64(new Uint8Array(buf));
       const name: string = uri.split('/').pop() || 'file';
-      const type: string = this.guessMime(name);
+      this.injectFileBase64(b64, name, guessMime(name));
+    } catch (e) {
+      hilog.warn(DOMAIN, TAG, 'dropFileToPage error: %{public}s', JSON.stringify(e));
+    }
+  }
+
+  /** base64 文件内容注入页面文件输入框 */
+  private injectFileBase64(b64: string, name: string, type: string): void {
+    try {
       const script: string =
         `(()=>{const input=document.querySelector('input[type="file"]');` +
         `if(!input){return;}const bin=atob('${b64}');` +
@@ -431,44 +439,11 @@ struct Index {
         `const dt=new DataTransfer();dt.items.add(file);input.files=dt.files;` +
         `input.dispatchEvent(new Event('change',{bubbles:true}));})()`;
       this.controller.runJavaScript(script).catch((err: BusinessError) => {
-        hilog.warn(DOMAIN, TAG, 'inject drop file failed: %{public}s', JSON.stringify(err));
+        hilog.warn(DOMAIN, TAG, 'inject file failed: %{public}s', JSON.stringify(err));
       });
     } catch (e) {
-      hilog.warn(DOMAIN, TAG, 'dropFileToPage error: %{public}s', JSON.stringify(e));
+      hilog.warn(DOMAIN, TAG, 'injectFileBase64 error: %{public}s', JSON.stringify(e));
     }
-  }
-
-  private toBase64(bytes: Uint8Array): string {
-    const chars: string = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
-    let out: string = '';
-    for (let i = 0; i < bytes.length; i += 3) {
-      const b0: number = bytes[i];
-      const b1: number = i + 1 < bytes.length ? bytes[i + 1] : 0;
-      const b2: number = i + 2 < bytes.length ? bytes[i + 2] : 0;
-      const n: number = (b0 << 16) | (b1 << 8) | b2;
-      out += chars[(n >> 18) & 63];
-      out += chars[(n >> 12) & 63];
-      out += chars[(n >> 6) & 63];
-      out += chars[n & 63];
-    }
-    const pad: number = bytes.length % 3;
-    if (pad === 1) {
-      out = out.slice(0, -2) + '==';
-    } else if (pad === 2) {
-      out = out.slice(0, -1) + '=';
-    }
-    return out;
-  }
-
-  private guessMime(name: string): string {
-    const n = name.toLowerCase();
-    if (n.endsWith('.png')) return 'image/png';
-    if (n.endsWith('.jpg') || n.endsWith('.jpeg')) return 'image/jpeg';
-    if (n.endsWith('.gif')) return 'image/gif';
-    if (n.endsWith('.webp')) return 'image/webp';
-    if (n.endsWith('.pdf')) return 'application/pdf';
-    if (n.endsWith('.txt') || n.endsWith('.md')) return 'text/plain';
-    return 'application/octet-stream';
   }
 
   private reloadPage(): void {
