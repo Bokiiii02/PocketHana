@@ -323,7 +323,12 @@ struct Index {
         `}` +
         `if(!window.__hanakoDropProbe){window.__hanakoDropProbe=true;` +
         `window.addEventListener('dragover',function(e){try{var dt=e.dataTransfer;console.log('[hanako-drop] over types='+String(dt?dt.types:''));}catch(x){}});` +
-        `window.addEventListener('drop',function(e){try{var dt=e.dataTransfer;var n=dt?dt.items.length:0;var f=dt?dt.files.length:0;var t=dt?String(dt.types):'';console.log('[hanako-drop] drop items='+n+' files='+f+' types='+t);}catch(x){}});` +
+        `window.addEventListener('drop',function(e){try{e.preventDefault();var dt=e.dataTransfer;var f=dt&&dt.files&&dt.files[0];` +
+        `var info='no-file';if(f){info='name='+f.name+'|type='+f.type+'|size='+f.size;}` +
+        `var u='';try{u=dt.getData('uri')||'';}catch(x){}var tu='';try{tu=dt.getData('text/uri-list')||'';}catch(x){}` +
+        `console.log('[hanako-drop] drop '+info+' uri='+u+' urilist='+tu);` +
+        `if(f&&f.arrayBuffer){f.arrayBuffer().then(function(ab){console.log('[hanako-drop] file read ok bytes='+ab.byteLength);}).catch(function(err){console.log('[hanako-drop] file read fail '+String(err));});}` +
+        `}catch(x){}});` +
         `}` +
         `})()`;
       this.controller.runJavaScript(script).catch((err: BusinessError) => {
