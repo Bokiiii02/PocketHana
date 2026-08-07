@@ -694,6 +694,7 @@ struct Index {
             .height(48)
             .backgroundColor('#ffffff')
             .fontSize(16)
+            .textAlign(TextAlign.Start)
             .defaultFocus(true)
             .caretPosition(0)
             .onChange((value: string) => {
