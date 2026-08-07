@@ -13,7 +13,7 @@ import { window, promptAction } from '@kit.ArkUI';
 import { scanBarcode } from '@kit.ScanKit';
 import { url } from '@kit.ArkTS';
 import { NotificationClient } from '../service/NotificationClient';
-import { readShare, clearShareSync, writeShareFiles, writeShareText, SharePayload, ShareFileItem } from '../service/ShareBridge';
+import { readShare, clearShareSync, SharePayload, ShareFileItem } from '../service/ShareBridge';
 import { toBase64, guessMime } from '../service/ShareUtil';
 import { unifiedDataChannel } from '@kit.ArkData';
 import { fileIo } from '@kit.CoreFileKit';
@@ -387,21 +387,9 @@ struct Index {
       if (data.text.length > 0) {
         hilog.info(DOMAIN, TAG, 'share text inject seq=%{public}d', data.seq);
         this.injectTextToEditor(data.text);
-        this.shareBusy = false;
-        return;
-      }
-      if (data.files.length > 0) {
+      } else if (data.files.length > 0) {
         hilog.info(DOMAIN, TAG, 'share files inject seq=%{public}d n=%{public}d', data.seq, data.files.length);
-        this.injectFilesToPage(data.files, (ok: boolean) => {
-          this.shareBusy = false;
-          if (!ok) {
-            hilog.warn(DOMAIN, TAG, 'inject no input, write back share data');
-            writeShareFiles(getContext(this), data.files).catch((err: BusinessError) => {
-              hilog.warn(DOMAIN, TAG, 'write back files failed: %{public}s', JSON.stringify(err));
-            });
-          }
-        });
-        return;
+        this.injectFilesToPage(data.files);
       }
       this.shareBusy = false;
     }).catch((err: BusinessError) => {
@@ -410,17 +398,21 @@ struct Index {
     });
   }
 
-  /** 注入文本到页面输入框 */
+  /** 注入文本到页面输入框（输入框未就绪时挂 window 定时重试） */
   private injectTextToEditor(text: string): void {
     try {
       const script: string =
-        `(()=>{const el=document.querySelector('[contenteditable="true"]');if(!el)return;el.focus();` +
-        `document.execCommand('insertText',false,${JSON.stringify(text)});})()`;
+        `(()=>{const doInject=()=>{const el=document.querySelector('[contenteditable="true"]');` +
+        `if(!el)return false;el.focus();document.execCommand('insertText',false,${JSON.stringify(text)});return true;};` +
+        `if(doInject())return;window.__hanakoPendingText=${JSON.stringify(text)};` +
+        `if(!window.__hanakoPendingTextTimer){window.__hanakoPendingTextTimer=setInterval(()=>{` +
+        `if(window.__hanakoPendingText&&doInject()){window.__hanakoPendingText=null;` +
+        `clearInterval(window.__hanakoPendingTextTimer);window.__hanakoPendingTextTimer=null;}},1000);}})()`;
       this.controller.runJavaScript(script).catch((err: BusinessError) => {
         hilog.warn(DOMAIN, TAG, 'inject share text failed: %{public}s', JSON.stringify(err));
       });
     } catch (e) {
-      hilog.warn(DOMAIN, TAG, 'checkShare error: %{public}s', JSON.stringify(e));
+      hilog.warn(DOMAIN, TAG, 'injectTextToEditor error: %{public}s', JSON.stringify(e));
     }
   }
 
@@ -463,15 +455,14 @@ struct Index {
       item.name = name;
       item.type = guessMime(name);
       const list: ShareFileItem[] = [item];
-      this.injectFilesToPage(list, () => {
-      });
+      this.injectFilesToPage(list);
     } catch (e) {
       hilog.warn(DOMAIN, TAG, 'dropFileToPage error: %{public}s', JSON.stringify(e));
     }
   }
 
-  /** 多文件注入页面附件输入框（一次塞入 DataTransfer 触发 change），回调返回是否找到输入框 */
-  private injectFilesToPage(files: ShareFileItem[], done: (ok: boolean) => void): void {
+  /** 多文件注入页面附件输入框（输入框未就绪时挂 window 定时重试，页面内自处理，不依赖返回值） */
+  private injectFilesToPage(files: ShareFileItem[]): void {
     try {
       let payload: string = '';
       for (let i = 0; i < files.length; i++) {
@@ -481,24 +472,25 @@ struct Index {
         payload += `{b64:${JSON.stringify(files[i].b64)},name:${JSON.stringify(files[i].name)},type:${JSON.stringify(files[i].type)}}`;
       }
       const script: string =
-        `(()=>{const input=document.querySelector('input[type="file"][class*="browser-file-input"]')` +
-        `||document.querySelector('input[type="file"][accept*="image"]')` +
-        `||document.querySelector('input[type="file"]');` +
-        `if(!input){return 'noinput';}const files=[${payload}];` +
-        `const dt=new DataTransfer();` +
-        `for(let i=0;i<files.length;i++){const bin=atob(files[i].b64);` +
-        `const arr=new Uint8Array(bin.length);for(let j=0;j<bin.length;j++){arr[j]=bin.charCodeAt(j);}` +
+        `(()=>{var files=[${payload}];` +
+        `var findInput=function(){var i=document.querySelector('input[type="file"][class*="browser-file-input"]');` +
+        `if(i)return i;i=document.querySelector('input[type="file"][accept*="image"]');` +
+        `if(i)return i;return document.querySelector('input[type="file"]');};` +
+        `var doInject=function(){var input=findInput();if(!input)return false;` +
+        `var dt=new DataTransfer();for(var i=0;i<files.length;i++){` +
+        `var bin=atob(files[i].b64);var arr=new Uint8Array(bin.length);` +
+        `for(var j=0;j<bin.length;j++){arr[j]=bin.charCodeAt(j);}` +
         `dt.items.add(new File([arr],files[i].name,{type:files[i].type}));}` +
-        `input.files=dt.files;input.dispatchEvent(new Event('change',{bubbles:true}));return 'ok';})()`;
-      this.controller.runJavaScript(script).then((res: string) => {
-        done(res === 'ok');
-      }).catch((err: BusinessError) => {
+        `input.files=dt.files;input.dispatchEvent(new Event('change',{bubbles:true}));return true;};` +
+        `if(doInject())return;window.__hanakoPendingFiles=files;` +
+        `if(!window.__hanakoPendingFilesTimer){window.__hanakoPendingFilesTimer=setInterval(function(){` +
+        `if(window.__hanakoPendingFiles&&doInject()){window.__hanakoPendingFiles=null;` +
+        `clearInterval(window.__hanakoPendingFilesTimer);window.__hanakoPendingFilesTimer=null;}},1000);}})()`;
+      this.controller.runJavaScript(script).catch((err: BusinessError) => {
         hilog.warn(DOMAIN, TAG, 'inject files failed: %{public}s', JSON.stringify(err));
-        done(false);
       });
     } catch (e) {
       hilog.warn(DOMAIN, TAG, 'injectFilesToPage error: %{public}s', JSON.stringify(e));
-      done(false);
     }
   }
 
