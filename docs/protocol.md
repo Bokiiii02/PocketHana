@@ -281,7 +281,7 @@ dmOwnerId?, peerId?, peerName?
 
 ## 8. 脆弱点与风险
 
-- 无官方 API 文档，端点/字段随版本变化（建议抓取最新 bundle 定期 diff）
+- 无官方 API 文档，端点/字段随版本变化
 - `stream_resume` / `sequence` 机制是流式可靠性的关键，原生端必须实现 seq 去重与断线重放
 - 消息发送 type（prompt / interject）与 uiContext 结构待实测确认
 - 服务端 cookie 有效期未知，401 时需要重新登录
