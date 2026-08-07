@@ -14,6 +14,8 @@ import { scanBarcode } from '@kit.ScanKit';
 import { url } from '@kit.ArkTS';
 import { NotificationClient } from '../service/NotificationClient';
 import { ShareBridge } from '../service/ShareBridge';
+import { unifiedDataChannel } from '@kit.ArkData';
+import { fileIo } from '@kit.CoreFileKit';
 
 const DOMAIN: number = 0x0001;
 const TAG: string = 'HanakoShell';
@@ -356,6 +358,90 @@ struct Index {
     } catch (e) {
       hilog.warn(DOMAIN, TAG, 'checkShare error: %{public}s', JSON.stringify(e));
     }
+  }
+
+  /** 中转站/系统拖拽：接收文件并注入页面 */
+  private handleDrop(event: DragEvent): void {
+    try {
+      const data: unifiedDataChannel.UnifiedData = event.getData();
+      const records: Array<unifiedDataChannel.UnifiedRecord> = data.getRecords();
+      for (const rec of records) {
+        if (rec instanceof unifiedDataChannel.File) {
+          const uri: string = rec.uri;
+          hilog.info(DOMAIN, TAG, 'drop file: %{public}s', uri);
+          this.dropFileToPage(uri);
+        }
+      }
+    } catch (e) {
+      hilog.warn(DOMAIN, TAG, 'handleDrop error: %{public}s', JSON.stringify(e));
+    }
+  }
+
+  /** 读文件内容 → base64 → 注入页面文件输入框 */
+  private dropFileToPage(uri: string): void {
+    try {
+      const file = fileIo.openSync(uri);
+      const stat = fileIo.statSync(file.fd);
+      const size: number = stat.size;
+      fileIo.closeSync(file);
+      if (size <= 0 || size > 20 * 1024 * 1024) {
+        hilog.warn(DOMAIN, TAG, 'drop file size invalid: %{public}d', size);
+        return;
+      }
+      const f2 = fileIo.openSync(uri);
+      const buf = new ArrayBuffer(size);
+      fileIo.readSync(f2.fd, buf);
+      fileIo.closeSync(f2);
+      const bytes = new Uint8Array(buf);
+      const b64: string = this.toBase64(bytes);
+      const name: string = uri.split('/').pop() || 'file';
+      const type: string = this.guessMime(name);
+      const script: string =
+        `(()=>{const input=document.querySelector('input[type="file"]');` +
+        `if(!input){return;}const bin=atob('${b64}');` +
+        `const arr=new Uint8Array(bin.length);for(let i=0;i<bin.length;i++){arr[i]=bin.charCodeAt(i);}` +
+        `const file=new File([arr],${JSON.stringify(name)},{type:${JSON.stringify(type)}});` +
+        `const dt=new DataTransfer();dt.items.add(file);input.files=dt.files;` +
+        `input.dispatchEvent(new Event('change',{bubbles:true}));})()`;
+      this.controller.runJavaScript(script).catch((err: BusinessError) => {
+        hilog.warn(DOMAIN, TAG, 'inject drop file failed: %{public}s', JSON.stringify(err));
+      });
+    } catch (e) {
+      hilog.warn(DOMAIN, TAG, 'dropFileToPage error: %{public}s', JSON.stringify(e));
+    }
+  }
+
+  private toBase64(bytes: Uint8Array): string {
+    const chars: string = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+    let out: string = '';
+    for (let i = 0; i < bytes.length; i += 3) {
+      const b0: number = bytes[i];
+      const b1: number = i + 1 < bytes.length ? bytes[i + 1] : 0;
+      const b2: number = i + 2 < bytes.length ? bytes[i + 2] : 0;
+      const n: number = (b0 << 16) | (b1 << 8) | b2;
+      out += chars[(n >> 18) & 63];
+      out += chars[(n >> 12) & 63];
+      out += chars[(n >> 6) & 63];
+      out += chars[n & 63];
+    }
+    const pad: number = bytes.length % 3;
+    if (pad === 1) {
+      out = out.slice(0, -2) + '==';
+    } else if (pad === 2) {
+      out = out.slice(0, -1) + '=';
+    }
+    return out;
+  }
+
+  private guessMime(name: string): string {
+    const n = name.toLowerCase();
+    if (n.endsWith('.png')) return 'image/png';
+    if (n.endsWith('.jpg') || n.endsWith('.jpeg')) return 'image/jpeg';
+    if (n.endsWith('.gif')) return 'image/gif';
+    if (n.endsWith('.webp')) return 'image/webp';
+    if (n.endsWith('.pdf')) return 'application/pdf';
+    if (n.endsWith('.txt') || n.endsWith('.md')) return 'text/plain';
+    return 'application/octet-stream';
   }
 
   private reloadPage(): void {
@@ -779,6 +865,9 @@ struct Index {
     .width('100%')
     .height('100%')
     .backgroundColor(this.bgColor)
+    .onDrop((event: DragEvent) => {
+      this.handleDrop(event);
+    })
     .onAreaChange((oldArea: Area, newArea: Area) => {
       // Area 的 width/height 单位已是 vp，直接使用，不再 px2vp
       const w: number = typeof newArea.width === 'number' ? newArea.width : parseFloat(String(newArea.width));
