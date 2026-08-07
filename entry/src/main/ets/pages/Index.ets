@@ -321,14 +321,17 @@ struct Index {
         `const fitInput=()=>{const els=document.querySelectorAll('textarea');for(const el of els){if(el.__hanakoFit)continue;el.__hanakoFit=true;const up=()=>{el.style.height='auto';const h=el.scrollHeight;el.style.height=(h>0?h+2:44)+'px';};el.addEventListener('input',up);el.addEventListener('focus',up);up();}};` +
         `try{fitInput();new MutationObserver(fitInput).observe(document.body,{childList:true,subtree:true});}catch(e){}` +
         `}` +
-        `if(!window.__hanakoDropProbe){window.__hanakoDropProbe=true;` +
-        `window.addEventListener('dragover',function(e){try{var dt=e.dataTransfer;console.log('[hanako-drop] over types='+String(dt?dt.types:''));}catch(x){}});` +
-        `window.addEventListener('drop',function(e){try{e.preventDefault();var dt=e.dataTransfer;var f=dt&&dt.files&&dt.files[0];` +
-        `var info='no-file';if(f){info='name='+f.name+'|type='+f.type+'|size='+f.size;}` +
-        `var u='';try{u=dt.getData('uri')||'';}catch(x){}var tu='';try{tu=dt.getData('text/uri-list')||'';}catch(x){}` +
-        `console.log('[hanako-drop] drop '+info+' uri='+u+' urilist='+tu);` +
-        `if(f&&f.arrayBuffer){f.arrayBuffer().then(function(ab){console.log('[hanako-drop] file read ok bytes='+ab.byteLength);}).catch(function(err){console.log('[hanako-drop] file read fail '+String(err));});}` +
-        `}catch(x){}});` +
+        `if(!window.__hanakoDropHandler){window.__hanakoDropHandler=true;` +
+        `window.addEventListener('drop',function(e){try{var dt=e.dataTransfer;if(!dt||!dt.files||!dt.files.length){return;}e.preventDefault();` +
+        `var file=dt.files[0];console.log('[hanako-drop] handle '+file.name);` +
+        `file.arrayBuffer().then(function(ab){` +
+        `var arr=new Uint8Array(ab);var input=document.querySelector('input[type="file"]');` +
+        `if(!input){console.log('[hanako-drop] no file input');return;}` +
+        `var f2=new File([arr],file.name,{type:file.type});var dt2=new DataTransfer();dt2.items.add(f2);` +
+        `input.files=dt2.files;input.dispatchEvent(new Event('change',{bubbles:true}));` +
+        `console.log('[hanako-drop] injected ok');` +
+        `}).catch(function(err){console.log('[hanako-drop] read fail '+String(err));});` +
+        `}catch(x){}},true);` +
         `}` +
         `})()`;
       this.controller.runJavaScript(script).catch((err: BusinessError) => {
