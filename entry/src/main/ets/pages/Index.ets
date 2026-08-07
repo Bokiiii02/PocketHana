@@ -461,34 +461,35 @@ struct Index {
     }
   }
 
-  /** 多文件注入页面附件输入框（输入框未就绪时挂 window 定时重试，页面内自处理，不依赖返回值） */
+  /** 多文件注入页面附件输入框（逐文件单独注入避免超大脚本 OOM；输入框未就绪挂 window 队列定时重试） */
   private injectFilesToPage(files: ShareFileItem[]): void {
     try {
-      let payload: string = '';
       for (let i = 0; i < files.length; i++) {
-        if (i > 0) {
-          payload += ',';
-        }
-        payload += `{b64:${JSON.stringify(files[i].b64)},name:${JSON.stringify(files[i].name)},type:${JSON.stringify(files[i].type)}}`;
+        const f: ShareFileItem = files[i];
+        const itemObj: string =
+          `{b64:${JSON.stringify(f.b64)},name:${JSON.stringify(f.name)},type:${JSON.stringify(f.type)}}`;
+        const script: string =
+          `(()=>{window.__hanakoPendingFiles=window.__hanakoPendingFiles||[];` +
+          `window.__hanakoPendingFiles.push(${itemObj});` +
+          `var findInput=function(){var i=document.querySelector('input[type="file"][class*="browser-file-input"]');` +
+          `if(i)return i;i=document.querySelector('input[type="file"][accept*="image"]');` +
+          `if(i)return i;return document.querySelector('input[type="file"]');};` +
+          `var tryInject=function(){var q=window.__hanakoPendingFiles;if(!q||!q.length)return false;` +
+          `var input=findInput();if(!input)return false;` +
+          `var dt=new DataTransfer();for(var k=0;k<q.length;k++){` +
+          `var bin=atob(q[k].b64);var arr=new Uint8Array(bin.length);` +
+          `for(var j=0;j<bin.length;j++){arr[j]=bin.charCodeAt(j);}` +
+          `dt.items.add(new File([arr],q[k].name,{type:q[k].type}));}` +
+          `input.files=dt.files;input.dispatchEvent(new Event('change',{bubbles:true}));` +
+          `window.__hanakoPendingFiles=[];return true;};` +
+          `if(tryInject())return;` +
+          `if(!window.__hanakoPendingTimer){window.__hanakoPendingTimer=setInterval(function(){` +
+          `if(window.__hanakoPendingFiles&&window.__hanakoPendingFiles.length&&tryInject()){` +
+          `clearInterval(window.__hanakoPendingTimer);window.__hanakoPendingTimer=null;}},1000);}})()`;
+        this.controller.runJavaScript(script).catch((err: BusinessError) => {
+          hilog.warn(DOMAIN, TAG, 'inject file %{public}d failed: %{public}s', i, JSON.stringify(err));
+        });
       }
-      const script: string =
-        `(()=>{var files=[${payload}];` +
-        `var findInput=function(){var i=document.querySelector('input[type="file"][class*="browser-file-input"]');` +
-        `if(i)return i;i=document.querySelector('input[type="file"][accept*="image"]');` +
-        `if(i)return i;return document.querySelector('input[type="file"]');};` +
-        `var doInject=function(){var input=findInput();if(!input)return false;` +
-        `var dt=new DataTransfer();for(var i=0;i<files.length;i++){` +
-        `var bin=atob(files[i].b64);var arr=new Uint8Array(bin.length);` +
-        `for(var j=0;j<bin.length;j++){arr[j]=bin.charCodeAt(j);}` +
-        `dt.items.add(new File([arr],files[i].name,{type:files[i].type}));}` +
-        `input.files=dt.files;input.dispatchEvent(new Event('change',{bubbles:true}));return true;};` +
-        `if(doInject())return;window.__hanakoPendingFiles=files;` +
-        `if(!window.__hanakoPendingFilesTimer){window.__hanakoPendingFilesTimer=setInterval(function(){` +
-        `if(window.__hanakoPendingFiles&&doInject()){window.__hanakoPendingFiles=null;` +
-        `clearInterval(window.__hanakoPendingFilesTimer);window.__hanakoPendingFilesTimer=null;}},1000);}})()`;
-      this.controller.runJavaScript(script).catch((err: BusinessError) => {
-        hilog.warn(DOMAIN, TAG, 'inject files failed: %{public}s', JSON.stringify(err));
-      });
     } catch (e) {
       hilog.warn(DOMAIN, TAG, 'injectFilesToPage error: %{public}s', JSON.stringify(e));
     }
