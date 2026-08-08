@@ -386,7 +386,7 @@ struct Index {
       clearShareSync(getContext(this));
       if (data.tooMany) {
         try {
-          promptAction.showToast({ message: '最多只能上传5张图片哦' });
+          promptAction.showToast({ message: '最多只能上传10张图片哦' });
         } catch (e) {
           hilog.warn(DOMAIN, TAG, 'toast error: %{public}s', JSON.stringify(e));
         }

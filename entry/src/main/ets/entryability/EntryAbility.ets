@@ -56,11 +56,11 @@ export default class EntryAbility extends UIAbility {
         hilog.info(SHARE_DOMAIN, SHARE_TAG, 'share records: %{public}d', records.length);
         const files: ShareFileItem[] = [];
         let text: string = '';
-        if (records.length > 5) {
-          hilog.warn(SHARE_DOMAIN, SHARE_TAG, 'share too many: %{public}d, keep first 5', records.length);
+        if (records.length > 10) {
+          hilog.warn(SHARE_DOMAIN, SHARE_TAG, 'share too many: %{public}d, keep first 10', records.length);
           markTooMany(this.context);
         }
-        const take: number = Math.min(records.length, 5);
+        const take: number = Math.min(records.length, 10);
         for (let i = 0; i < take; i++) {
           const rec = records[i];
           if (rec.uri !== undefined && rec.uri.length > 0) {
