@@ -14,6 +14,8 @@ const STORE: string = 'hanako_share';
 const KEY_TEXT: string = 'share_text';
 const KEY_FILES: string = 'share_files';
 const KEY_SEQ: string = 'share_seq';
+const KEY_TOO_MANY: string = 'share_too_many';
+const MAX_SHARE_FILES: number = 5;
 
 export class ShareFileItem {
   path: string = '';
@@ -26,6 +28,7 @@ export class SharePayload {
   text: string = '';
   files: ShareFileItem[] = [];
   seq: number = 0;
+  tooMany: boolean = false;
 }
 
 /** 写入文本分享 */
@@ -79,6 +82,7 @@ export function clearShareSync(context: Context): void {
     store.putSync(KEY_TEXT, '');
     store.putSync(KEY_FILES, '');
     store.putSync(KEY_SEQ, 0);
+    store.putSync(KEY_TOO_MANY, 0);
     store.flush().catch((err: Error) => {
       hilog.warn(DOMAIN, TAG, 'clearShareSync flush failed: %{public}s', JSON.stringify(err));
     });
@@ -98,6 +102,17 @@ export function clearShareSync(context: Context): void {
   }
 }
 
+/** 标记分享文件超限 */
+export async function markTooMany(context: Context): Promise<void> {
+  try {
+    const store = await preferences.getPreferences(context, { name: STORE });
+    await store.put(KEY_TOO_MANY, 1);
+    await store.flush();
+  } catch (e) {
+    hilog.warn(DOMAIN, TAG, 'markTooMany failed: %{public}s', JSON.stringify(e));
+  }
+}
+
 /** 读取分享内容（只读不清理，注入成功后再 clearShare） */
 export async function readShare(context: Context): Promise<SharePayload> {
   const payload: SharePayload = new SharePayload();
@@ -106,6 +121,7 @@ export async function readShare(context: Context): Promise<SharePayload> {
     const text: string = (await store.get(KEY_TEXT, '')) as string;
     const filesJson: string = (await store.get(KEY_FILES, '')) as string;
     payload.seq = (await store.get(KEY_SEQ, 0)) as number;
+    payload.tooMany = ((await store.get(KEY_TOO_MANY, 0)) as number) === 1;
     if (text.length > 0) {
       payload.text = text;
       hilog.info(DOMAIN, TAG, 'share read text');

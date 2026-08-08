@@ -328,24 +328,6 @@ struct Index {
         `try{fitInput();new MutationObserver(fitInput).observe(document.body,{childList:true,subtree:true});}catch(e){}` +
         `}` +
         `if(!window.__hanakoDropHandler){window.__hanakoDropHandler=true;` +
-        `try{fetch('./app-file-drag-BXCTczfT.js').then(function(r){return r.text();}).then(function(t){` +
-        `var def='notfound';var m=t.match(/function\s+l\s*\([^)]*\)\s*\{[^}]{0,300}/);` +
-        `if(m){def=m[0].slice(0,250);}else{var m2=t.match(/l\s*=\s*\([^)]*\)\s*=>[^,;]{0,200}/);` +
-        `if(m2){def=m2[0].slice(0,250);}}` +
-        `console.log('[hanako-drop] dragmod len='+t.length+' ki='+def);` +
-        `}).catch(function(e){console.log('[hanako-drop] fetchmod err '+String(e));});}catch(e){}` +
-        `try{var of=window.fetch;window.fetch=function(){var url=arguments[0];` +
-        `return of.apply(this,arguments).then(function(res){try{if(String(url).indexOf('upload-blob')>-1){` +
-        `res.clone().json().then(function(d){var u=d&&d.uploads&&d.uploads[0];` +
-        `console.log('[hanako-drop] blob resp name='+((u&&u.name)||'?')+' dest='+((u&&u.dest)||'?'));}).catch(function(){});` +
-        `}}catch(e){}return res;});};}catch(e){}` +
-        `try{fetch('/api/models',{credentials:'include'}).then(function(r){return r.json();}).then(function(d){` +
-        `var arr=d&&d.models||(Array.isArray(d)?d:[]);var out=[];for(var i=0;i<arr.length;i++){` +
-        `var m=arr[i]||{};out.push((m.id||m.name||'?')+':input='+JSON.stringify(m.input));}` +
-        `console.log('[hanako-models] '+out.join(' | '));}).catch(function(e){});` +
-        `fetch('/api/models/auxiliary-vision',{credentials:'include'}).then(function(r){return r.json();}).then(function(d){` +
-        `console.log('[hanako-models] aux-vision='+JSON.stringify(d).slice(0,200));}).catch(function(e){});` +
-        `}catch(e){}` +
         `window.addEventListener('drop',function(e){try{var dt=e.dataTransfer;if(!dt){return;}` +
         `var txt='';try{txt=dt.getData('text/plain')||'';}catch(x){}` +
         `if(txt.length>0){e.preventDefault();var el=document.querySelector('[contenteditable="true"]');` +
@@ -402,6 +384,13 @@ struct Index {
       this.lastShareSeq = data.seq;
       // 同步清空（防重复）+ 注入，失败写回重试
       clearShareSync(getContext(this));
+      if (data.tooMany) {
+        try {
+          promptAction.showToast({ message: '最多只能上传5张图片哦' });
+        } catch (e) {
+          hilog.warn(DOMAIN, TAG, 'toast error: %{public}s', JSON.stringify(e));
+        }
+      }
       if (data.text.length > 0) {
         hilog.info(DOMAIN, TAG, 'share text inject seq=%{public}d', data.seq);
         this.injectTextToEditor(data.text);
@@ -675,8 +664,8 @@ struct Index {
         })
         .onConsole((event: OnConsoleEvent) => {
           const msg: string = event.message.getMessage();
-          if (msg.startsWith('[hanako-drop]') || msg.startsWith('[hanako-models]')) {
-            hilog.info(DOMAIN, TAG, 'web probe: %{public}s', msg);
+          if (msg.startsWith('[hanako-drop]')) {
+            hilog.info(DOMAIN, TAG, 'web drop probe: %{public}s', msg);
           } else {
             const lvl: string = String(event.message.getMessageLevel());
             const low: string = msg.toLowerCase();

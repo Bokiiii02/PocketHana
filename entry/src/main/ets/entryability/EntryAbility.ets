@@ -19,7 +19,7 @@ import { window } from '@kit.ArkUI';
 import { systemShare } from '@kit.ShareKit';
 import { fileIo } from '@kit.CoreFileKit';
 import { BusinessError } from '@kit.BasicServicesKit';
-import { writeShareFiles, writeShareText, ShareFileItem } from '../service/ShareBridge';
+import { writeShareFiles, writeShareText, markTooMany, ShareFileItem } from '../service/ShareBridge';
 import { toBase64, guessMime, detectImageType, extForType } from '../service/ShareUtil';
 
 const DOMAIN = 0x0000;
@@ -56,7 +56,13 @@ export default class EntryAbility extends UIAbility {
         hilog.info(SHARE_DOMAIN, SHARE_TAG, 'share records: %{public}d', records.length);
         const files: ShareFileItem[] = [];
         let text: string = '';
-        for (const rec of records) {
+        if (records.length > 5) {
+          hilog.warn(SHARE_DOMAIN, SHARE_TAG, 'share too many: %{public}d, keep first 5', records.length);
+          markTooMany(this.context);
+        }
+        const take: number = Math.min(records.length, 5);
+        for (let i = 0; i < take; i++) {
+          const rec = records[i];
           if (rec.uri !== undefined && rec.uri.length > 0) {
             const item: ShareFileItem | null = this.readShareFileItem(rec.uri);
             if (item !== null) {
