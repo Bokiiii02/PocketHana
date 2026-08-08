@@ -39,6 +39,9 @@ struct Index {
   @State hasError: boolean = false;
   @State isChatReady: boolean = false;
   @State showSettings: boolean = false;
+  @State showImgMenu: boolean = false;
+  private menuB64: string = '';
+  private menuName: string = '';
   @State editUrl: string = DEFAULT_URL;
   // 页面主背景色（系统栏 / 窗口 / 壳层 UI 统一跟随）
   @State bgColor: string = '#F7F1E7';
@@ -538,30 +541,15 @@ struct Index {
     }
   }
 
-  /** 长按图片弹出操作菜单（保存/复制/分享） */
+  /** 长按图片弹出操作菜单（复制/分享，自定义样式） */
   private showImageMenu(b64: string, name: string): void {
-    try {
-      promptAction.showActionMenu({
-        title: '图片操作',
-        buttons: [
-          { text: '保存到相册', color: '#c9a06c' },
-          { text: '复制图片', color: '#333333' },
-          { text: '分享', color: '#333333' }
-        ]
-      }).then((res: promptAction.ActionMenuSuccessResponse) => {
-        if (res.index === 0) {
-          saveBase64ToLibrary(getContext(this), b64, name);
-        } else if (res.index === 1) {
-          copyBase64ToClipboard(b64);
-        } else if (res.index === 2) {
-          shareBase64(getContext(this), b64, name);
-        }
-      }).catch((err: BusinessError) => {
-        hilog.warn(DOMAIN, TAG, 'menu canceled: %{public}s', JSON.stringify(err));
-      });
-    } catch (e) {
-      hilog.warn(DOMAIN, TAG, 'showImageMenu error: %{public}s', JSON.stringify(e));
-    }
+    this.menuB64 = b64;
+    this.menuName = name;
+    this.showImgMenu = true;
+  }
+
+  private closeImageMenu(): void {
+    this.showImgMenu = false;
   }
 
   private reloadPage(): void {
@@ -692,6 +680,10 @@ struct Index {
   }
 
   onBackPress(): boolean {
+    if (this.showImgMenu) {
+      this.closeImageMenu();
+      return true;
+    }
     if (this.showSettings) {
       this.closeSettingsPanel();
       return true;
@@ -725,8 +717,7 @@ struct Index {
           this.hasError = false;
         })
         .onDownloadStart((event: OnDownloadStartEvent) => {
-          // ArkWeb 无系统下载：记录并尝试走注入拦截通道保存
-          hilog.info(DOMAIN, TAG, 'download start: %{public}s', (event.url || '').slice(0, 150));
+          // 下载走注入拦截通道保存（系统保存框）
         })
         .onConsole((event: OnConsoleEvent) => {
           const msg: string = event.message.getMessage();
@@ -1004,6 +995,90 @@ struct Index {
         .markAnchor({ x: '50%', y: '50%' })
         .transition(TransitionEffect.scale({ x: 0.92, y: 0.92 }).combine(TransitionEffect.OPACITY)
           .animation({ duration: 200, curve: Curve.EaseOut }))
+      }
+
+      // 图片操作菜单：底部弹出卡片（复制/分享）
+      if (this.showImgMenu) {
+        Column() {
+          Column() {
+            Text('图片操作')
+              .fontSize(13)
+              .fontColor('#a8977e')
+              .margin({ top: 16, bottom: 4 })
+            Row() {
+              Text('📋')
+                .fontSize(20)
+              Text('复制图片')
+                .fontSize(17)
+                .fontColor('#3a3226')
+                .margin({ left: 14 })
+              Blank()
+              Text('›')
+                .fontSize(18)
+                .fontColor('#d8cdb8')
+            }
+            .width('100%')
+            .height(60)
+            .padding({ left: 26, right: 24 })
+            .onClick(() => {
+              const b: string = this.menuB64;
+              this.closeImageMenu();
+              copyBase64ToClipboard(b);
+              promptAction.showToast({ message: '图片已复制' });
+            })
+            Divider()
+              .strokeWidth(0.5)
+              .color('#eee4d0')
+              .margin({ left: 60, right: 0 })
+            Row() {
+              Text('📤')
+                .fontSize(20)
+              Text('分享')
+                .fontSize(17)
+                .fontColor('#3a3226')
+                .margin({ left: 14 })
+              Blank()
+              Text('›')
+                .fontSize(18)
+                .fontColor('#d8cdb8')
+            }
+            .width('100%')
+            .height(60)
+            .padding({ left: 26, right: 24 })
+            .onClick(() => {
+              const b: string = this.menuB64;
+              const n: string = this.menuName;
+              this.closeImageMenu();
+              shareBase64(getContext(this), b, n);
+            })
+            Divider()
+              .strokeWidth(0.5)
+              .color('#eee4d0')
+              .margin({ top: 4 })
+            Text('取消')
+              .fontSize(17)
+              .fontColor('#8a7a5c')
+              .width('100%')
+              .height(52)
+              .textAlign(TextAlign.Center)
+              .onClick(() => {
+                this.closeImageMenu();
+              })
+          }
+          .width('100%')
+          .backgroundColor('#FFFDF8')
+          .borderRadius({ topLeft: 26, topRight: 26 })
+          .padding({ bottom: 22 })
+        }
+        .width('100%')
+        .height('100%')
+        .justifyContent(FlexAlign.End)
+        .backgroundColor('#55000000')
+        .onClick(() => {
+          this.closeImageMenu();
+        })
+        .transition(TransitionEffect.translate({ y: 60 }).combine(TransitionEffect.OPACITY)
+          .animation({ duration: 220, curve: Curve.EaseOut }))
       }
     }
     .width('100%')

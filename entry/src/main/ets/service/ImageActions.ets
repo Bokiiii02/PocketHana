@@ -52,7 +52,6 @@ export function writeTempFile(context: Context, name: string, bytes: Uint8Array)
 
 /** 保存图片到图库（PhotoViewPicker 系统图库保存框，无需权限） */
 export async function saveBase64ToLibrary(context: Context, b64: string, name: string): Promise<void> {
-  hilog.info(DOMAIN, TAG, 'save library called: %{public}s', name);
   try {
     const bytes: Uint8Array = base64ToBytes(b64);
     const photoPicker = new picker.PhotoViewPicker();
@@ -70,7 +69,6 @@ export async function saveBase64ToLibrary(context: Context, b64: string, name: s
 
 /** 保存图片（系统保存对话框选择位置，写入目标文件，无需权限；用于附件类保存） */
 export async function saveBase64ToGallery(context: Context, b64: string, name: string): Promise<void> {
-  hilog.info(DOMAIN, TAG, 'save gallery(doc) called: %{public}s', name);
   try {
     const bytes: Uint8Array = base64ToBytes(b64);
     const docPicker = new picker.DocumentViewPicker(context);
@@ -103,21 +101,16 @@ export async function copyBase64ToClipboard(b64: string): Promise<void> {
 /** 系统分享图片 */
 export async function shareBase64(context: Context, b64: string, name: string): Promise<void> {
   try {
-    hilog.info(DOMAIN, TAG, 'share start: %{public}s', name);
     const bytes: Uint8Array = base64ToBytes(b64);
-    hilog.info(DOMAIN, TAG, 'share bytes: %{public}d', bytes.length);
     const path: string = writeTempFile(context, name, bytes);
-    hilog.info(DOMAIN, TAG, 'share temp file: %{public}s', path);
     const uri: string = `file://${path}`;
     const data = new systemShare.SharedData({
       utd: utd.UniformDataType.IMAGE,
       uri: uri,
       title: name
     });
-    hilog.info(DOMAIN, TAG, 'share data created, utd=%{public}s', String(utd.UniformDataType.IMAGE));
     const controller = new systemShare.ShareController(data);
     await controller.show(context as common.UIAbilityContext, {});
-    hilog.info(DOMAIN, TAG, 'share sheet opened: %{public}s', name);
   } catch (e) {
     hilog.warn(DOMAIN, TAG, 'shareBase64 failed: %{public}s', JSON.stringify(e));
   }
