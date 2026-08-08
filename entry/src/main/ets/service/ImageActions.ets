@@ -103,14 +103,18 @@ export async function copyBase64ToClipboard(b64: string): Promise<void> {
 /** 系统分享图片 */
 export async function shareBase64(context: Context, b64: string, name: string): Promise<void> {
   try {
+    hilog.info(DOMAIN, TAG, 'share start: %{public}s', name);
     const bytes: Uint8Array = base64ToBytes(b64);
+    hilog.info(DOMAIN, TAG, 'share bytes: %{public}d', bytes.length);
     const path: string = writeTempFile(context, name, bytes);
+    hilog.info(DOMAIN, TAG, 'share temp file: %{public}s', path);
     const uri: string = `file://${path}`;
     const data = new systemShare.SharedData({
       utd: utd.UniformDataType.IMAGE,
       uri: uri,
       title: name
     });
+    hilog.info(DOMAIN, TAG, 'share data created, utd=%{public}s', String(utd.UniformDataType.IMAGE));
     const controller = new systemShare.ShareController(data);
     await controller.show(context as common.UIAbilityContext, {});
     hilog.info(DOMAIN, TAG, 'share sheet opened: %{public}s', name);
