@@ -9,15 +9,12 @@ import { connection } from '@kit.NetworkKit';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { common } from '@kit.AbilityKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
-import { window, promptAction } from '@kit.ArkUI';
+import { window } from '@kit.ArkUI';
 import { scanBarcode } from '@kit.ScanKit';
 import { url } from '@kit.ArkTS';
 import { NotificationClient } from '../service/NotificationClient';
 import { readShare, clearShareSync, SharePayload, ShareFileItem } from '../service/ShareBridge';
 import { saveBase64ToLibrary, copyBase64ToClipboard, shareBase64 } from '../service/ImageActions';
-import { toBase64, guessMime } from '../service/ShareUtil';
-import { unifiedDataChannel } from '@kit.ArkData';
-import { fileIo } from '@kit.CoreFileKit';
 
 const DOMAIN: number = 0x0001;
 const TAG: string = 'HanakoShell';
@@ -356,10 +353,11 @@ struct Index {
         `if(a&&a.href){url=a.href;}else{var dl=el&&el.closest?el.closest('[class*="download"],[class*="Download"],[class*="save"],[class*="Save"]'):null;` +
         `if(dl){var card=dl.closest('[class*="message"],[class*="card"],[class*="image"],[class*="bubble"]');` +
         `var img=card?card.querySelector('img'):null;if(img&&img.src){url=img.src;}}}` +
+        `var fname=a&&a.download?a.download:new URL(url).pathname.split('/').pop().split('?')[0];if(!fname)fname='hanako_download_'+Date.now();` +
         `if(!url)return;var p=url.indexOf('blob:')===0?fetch(url):fetch(url,{credentials:'include'});` +
         `p.then(function(r){return r.blob();}).then(function(b){return new Promise(function(res){var fr=new FileReader();fr.onload=function(){res(fr.result);};fr.readAsDataURL(b);});})` +
         `.then(function(d){var c=d.indexOf(',');var b64=c>=0?d.slice(c+1):d;window.__hanakoImageB64=b64;` +
-        `window.__hanakoImageName='hanako_image_'+Date.now()+'.png';console.log('[hanako-img] ready save');}).catch(function(){});` +
+        `window.__hanakoImageName=fname;console.log('[hanako-img] ready save '+fname);}).catch(function(){});` +
         `}catch(err){}},true);` +
         `var lp=null;` +
         `document.addEventListener('touchstart',function(e){try{var el=e.target;var img=el&&el.closest?el.closest('img'):null;` +
@@ -370,6 +368,18 @@ struct Index {
         `.then(function(d){var c=d.indexOf(',');var b64=c>=0?d.slice(c+1):d;window.__hanakoImageB64=b64;` +
         `window.__hanakoImageName='hanako_image_'+Date.now()+'.png';console.log('[hanako-img] ready menu');}).catch(function(){});` +
         `}lp=null;},true);` +
+        `if(!window.__hanakoPasteHandler){window.__hanakoPasteHandler=true;` +
+        `document.addEventListener('paste',function(e){try{` +
+        `console.log('[hanako-paste] event, copyLen='+(window.__hanakoImageCopyB64||'').length);` +
+        `var copy=window.__hanakoImageCopyB64;if(!copy){console.log('[hanako-paste] no copy, pass');return;}` +
+        `var ext=((window.__hanakoImageCopyName||'')+'').split('.').pop()||'png';` +
+        `var mime=ext==='jpg'||ext==='jpeg'?'jpeg':ext==='gif'?'gif':ext==='webp'?'webp':'png';` +
+        `var html='<img src=\"data:image/'+mime+';base64,'+copy+'\" />';` +
+        `e.preventDefault();` +
+        `var ed=document.querySelector('[contenteditable=\"true\"]');` +
+        `if(ed){ed.focus();document.execCommand('insertHTML',false,html);}` +
+        `window.__hanakoImageCopyB64='';console.log('[hanako-paste] image inserted');` +
+        `}catch(err){console.log('[hanako-paste] err '+String(err));}});}` +
         `}` +
         `})()`;
       this.controller.runJavaScript(script).catch((err: BusinessError) => {
@@ -400,14 +410,14 @@ struct Index {
       return;
     }
     this.shareBusy = true;
-    readShare(getContext(this)).then((data: SharePayload) => {
+    readShare(this.getUIContext().getHostContext() as common.UIAbilityContext).then((data: SharePayload) => {
       if (data.seq === 0 || data.seq === this.lastShareSeq) {
         this.shareBusy = false;
         return;
       }
       this.lastShareSeq = data.seq;
       // 同步清空（防重复）+ 注入，失败写回重试
-      clearShareSync(getContext(this));
+      clearShareSync(this.getUIContext().getHostContext() as common.UIAbilityContext);
       if (data.text.length > 0) {
         hilog.info(DOMAIN, TAG, 'share text inject seq=%{public}d', data.seq);
         this.injectTextToEditor(data.text);
@@ -437,51 +447,6 @@ struct Index {
       });
     } catch (e) {
       hilog.warn(DOMAIN, TAG, 'injectTextToEditor error: %{public}s', JSON.stringify(e));
-    }
-  }
-
-  /** 中转站/系统拖拽：接收文件并注入页面 */
-  private handleDrop(event: DragEvent): void {
-    try {
-      const data: unifiedDataChannel.UnifiedData = event.getData();
-      const records: Array<unifiedDataChannel.UnifiedRecord> = data.getRecords();
-      for (const rec of records) {
-        if (rec instanceof unifiedDataChannel.File) {
-          const uri: string = rec.uri;
-          hilog.info(DOMAIN, TAG, 'drop file: %{public}s', uri);
-          this.dropFileToPage(uri);
-        }
-      }
-    } catch (e) {
-      hilog.warn(DOMAIN, TAG, 'handleDrop error: %{public}s', JSON.stringify(e));
-    }
-  }
-
-  /** 读文件内容 → base64 → 注入页面文件输入框 */
-  private dropFileToPage(uri: string): void {
-    try {
-      const file = fileIo.openSync(uri);
-      const stat = fileIo.statSync(file.fd);
-      const size: number = stat.size;
-      fileIo.closeSync(file);
-      if (size <= 0 || size > 20 * 1024 * 1024) {
-        hilog.warn(DOMAIN, TAG, 'drop file size invalid: %{public}d', size);
-        return;
-      }
-      const f2 = fileIo.openSync(uri);
-      const buf = new ArrayBuffer(size);
-      fileIo.readSync(f2.fd, buf);
-      fileIo.closeSync(f2);
-      const b64: string = toBase64(new Uint8Array(buf));
-      const name: string = uri.split('/').pop() || 'file';
-      const item: ShareFileItem = new ShareFileItem();
-      item.b64 = b64;
-      item.name = name;
-      item.type = guessMime(name);
-      const list: ShareFileItem[] = [item];
-      this.injectFilesToPage(list);
-    } catch (e) {
-      hilog.warn(DOMAIN, TAG, 'dropFileToPage error: %{public}s', JSON.stringify(e));
     }
   }
 
@@ -530,7 +495,7 @@ struct Index {
           }
           const fname: string = name.length > 0 ? name : `hanako_image_${Date.now()}.png`;
           if (!isMenu) {
-            saveBase64ToLibrary(getContext(this), b64, fname);
+            saveBase64ToLibrary(this.getUIContext().getHostContext() as common.UIAbilityContext, b64, fname);
           } else {
             this.showImageMenu(b64, fname);
           }
@@ -552,6 +517,15 @@ struct Index {
     this.showImgMenu = false;
   }
 
+  /** skill 推荐：getPromptAction().showToast（promptAction.showToast 已废弃） */
+  private toast(msg: string): void {
+    try {
+      this.getUIContext().getPromptAction().showToast({ message: msg });
+    } catch (e) {
+      hilog.warn(DOMAIN, TAG, 'toast failed: %{public}s', JSON.stringify(e));
+    }
+  }
+
   private reloadPage(): void {
     this.hasError = false;
     this.isLoading = true;
@@ -567,7 +541,7 @@ struct Index {
   private saveSettings(): void {
     let u: string = this.editUrl.trim();
     if (u.length === 0) {
-      promptAction.showToast({ message: '请输入服务器地址' });
+      this.toast('请输入服务器地址');
       return;
     }
     if (!u.startsWith('http://') && !u.startsWith('https://')) {
@@ -576,7 +550,7 @@ struct Index {
     // 地址 origin 变化（且已有地址）：清 cookie，提示重新验证，自动回登录页
     if (this.currentUrl.length > 0 && !this.isSameOrigin(this.currentUrl, u)) {
       this.clearCookies();
-      promptAction.showToast({ message: '检测到地址改变，需要重新验证' });
+      this.toast('检测到地址改变，需要重新验证');
     }
     this.currentUrl = u;
     this.editUrl = u;
@@ -634,7 +608,7 @@ struct Index {
         // 地址 origin 变化（且已有地址）：清 cookie，提示重新验证，自动回登录页
         if (this.currentUrl.length > 0 && !this.isSameOrigin(this.currentUrl, target)) {
           this.clearCookies();
-          promptAction.showToast({ message: '检测到地址改变，需要重新验证' });
+          this.toast('检测到地址改变，需要重新验证');
         }
         this.editUrl = target;
         this.saveSettings();
@@ -716,9 +690,6 @@ struct Index {
           // 页面开始加载：清错误态，避免 reload 后白条停留在错误状态
           this.hasError = false;
         })
-        .onDownloadStart((event: OnDownloadStartEvent) => {
-          // 下载走注入拦截通道保存（系统保存框）
-        })
         .onConsole((event: OnConsoleEvent) => {
           const msg: string = event.message.getMessage();
           if (msg.startsWith('[hanako-img]')) {
@@ -727,6 +698,8 @@ struct Index {
             this.handleImageData(isMenu);
           } else if (msg.startsWith('[hanako-drop]')) {
             hilog.info(DOMAIN, TAG, 'web drop probe: %{public}s', msg);
+          } else if (msg.startsWith('[hanako')) {
+            hilog.info(DOMAIN, TAG, 'hanako: %{public}s', msg);
           } else {
             const lvl: string = String(event.message.getMessageLevel());
             const low: string = msg.toLowerCase();
@@ -1008,7 +981,7 @@ struct Index {
             Row() {
               Text('📋')
                 .fontSize(20)
-              Text('复制图片')
+              Text('复制图片（测试中）')
                 .fontSize(17)
                 .fontColor('#3a3226')
                 .margin({ left: 14 })
@@ -1022,9 +995,14 @@ struct Index {
             .padding({ left: 26, right: 24 })
             .onClick(() => {
               const b: string = this.menuB64;
+              const n: string = String(this.menuName || '');
               this.closeImageMenu();
               copyBase64ToClipboard(b);
-              promptAction.showToast({ message: '图片已复制' });
+              this.controller.runJavaScript(`window.__hanakoImageCopyB64='${b}';window.__hanakoImageCopyName='${n}';console.log('[hanako] copy injected len='+window.__hanakoImageCopyB64.length);`)
+                .catch((err: BusinessError) => {
+                  hilog.warn(DOMAIN, TAG, '[copy] runJavaScript failed: %{public}s', JSON.stringify(err));
+                });
+              this.toast('图片已复制');
             })
             Divider()
               .strokeWidth(0.5)
@@ -1051,11 +1029,11 @@ struct Index {
               // 必须在 closeImageMenu 之前捕获 UIContext，否则菜单销毁后 UIContext 可能失效
               const hostCtx = this.getUIContext().getHostContext() as common.UIAbilityContext;
               this.closeImageMenu();
-              promptAction.showToast({ message: `正在分享 ${n}` });
+              this.toast(`正在分享 ${n}`);
               const p: Promise<void> = shareBase64(hostCtx, b, n);
               p.catch((err: BusinessError) => {
                 hilog.warn(DOMAIN, TAG, 'share promise err: %{public}s', JSON.stringify(err));
-                promptAction.showToast({ message: '分享失败：' + (err.message || '未知错误') });
+                this.toast('分享失败：' + (err.message || '未知错误'));
               });
             })
             Divider()
@@ -1091,9 +1069,6 @@ struct Index {
     .width('100%')
     .height('100%')
     .backgroundColor(this.bgColor)
-    .onDrop((event: DragEvent) => {
-      this.handleDrop(event);
-    })
     .onAreaChange((oldArea: Area, newArea: Area) => {
       // Area 的 width/height 单位已是 vp，直接使用，不再 px2vp
       const w: number = typeof newArea.width === 'number' ? newArea.width : parseFloat(String(newArea.width));

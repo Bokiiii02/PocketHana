@@ -3,7 +3,6 @@
  * base64 图片：保存到相册（系统保存对话框）、复制到剪贴板、系统分享
  */
 import { fileIo, fileUri, picker } from '@kit.CoreFileKit';
-import { photoAccessHelper } from '@kit.MediaLibraryKit';
 import { pasteboard } from '@kit.BasicServicesKit';
 import { image } from '@kit.ImageKit';
 import { uniformTypeDescriptor as utd } from '@kit.ArkData';
@@ -50,25 +49,8 @@ export function writeTempFile(context: Context, name: string, bytes: Uint8Array)
   return p;
 }
 
-/** 保存图片到图库（PhotoViewPicker 系统图库保存框，无需权限） */
+/** 保存图片（系统保存对话框，DocumentViewPicker 为 skill 推荐保存 API） */
 export async function saveBase64ToLibrary(context: Context, b64: string, name: string): Promise<void> {
-  try {
-    const bytes: Uint8Array = base64ToBytes(b64);
-    const photoPicker = new picker.PhotoViewPicker();
-    const uris: string[] = await photoPicker.save({ newFileNames: [name] });
-    if (uris.length > 0) {
-      const f = fileIo.openSync(uris[0], fileIo.OpenMode.READ_WRITE | fileIo.OpenMode.TRUNC);
-      fileIo.writeSync(f.fd, bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength));
-      fileIo.closeSync(f);
-    }
-    hilog.info(DOMAIN, TAG, 'saved to library: %{public}s', name);
-  } catch (e) {
-    hilog.warn(DOMAIN, TAG, 'saveBase64ToLibrary failed: %{public}s', JSON.stringify(e));
-  }
-}
-
-/** 保存图片（系统保存对话框选择位置，写入目标文件，无需权限；用于附件类保存） */
-export async function saveBase64ToGallery(context: Context, b64: string, name: string): Promise<void> {
   try {
     const bytes: Uint8Array = base64ToBytes(b64);
     const docPicker = new picker.DocumentViewPicker(context);
@@ -78,9 +60,8 @@ export async function saveBase64ToGallery(context: Context, b64: string, name: s
       fileIo.writeSync(f.fd, bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength));
       fileIo.closeSync(f);
     }
-    hilog.info(DOMAIN, TAG, 'save dialog shown: %{public}s', name);
   } catch (e) {
-    hilog.warn(DOMAIN, TAG, 'saveBase64ToGallery failed: %{public}s', JSON.stringify(e));
+    hilog.warn(DOMAIN, TAG, 'saveBase64ToLibrary failed: %{public}s', JSON.stringify(e));
   }
 }
 

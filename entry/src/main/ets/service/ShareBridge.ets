@@ -132,27 +132,3 @@ export async function readShare(context: Context): Promise<SharePayload> {
     return payload;
   }
 }
-
-/** 清理分享记录与沙箱文件（注入成功后调用） */
-export async function clearShare(context: Context): Promise<void> {
-  try {
-    const store = await preferences.getPreferences(context, { name: STORE });
-    const filesJson: string = (await store.get(KEY_FILES, '')) as string;
-    await store.put(KEY_TEXT, '');
-    await store.put(KEY_FILES, '');
-    await store.flush();
-    if (filesJson.length > 0) {
-      const list: ShareFileItem[] = JSON.parse(filesJson) as ShareFileItem[];
-      for (const it of list) {
-        try {
-          fileIo.unlinkSync(it.path);
-        } catch (e) {
-          hilog.warn(DOMAIN, TAG, 'unlink share file failed: %{public}s', JSON.stringify(e));
-        }
-      }
-    }
-    hilog.info(DOMAIN, TAG, 'share cleared');
-  } catch (e) {
-    hilog.warn(DOMAIN, TAG, 'clearShare failed: %{public}s', JSON.stringify(e));
-  }
-}
