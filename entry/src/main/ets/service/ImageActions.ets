@@ -2,7 +2,7 @@
  * Hanako 壳 · 图片操作
  * base64 图片：保存到相册（系统保存对话框）、复制到剪贴板、系统分享
  */
-import { fileIo, picker } from '@kit.CoreFileKit';
+import { fileIo, fileUri, picker } from '@kit.CoreFileKit';
 import { photoAccessHelper } from '@kit.MediaLibraryKit';
 import { pasteboard } from '@kit.BasicServicesKit';
 import { image } from '@kit.ImageKit';
@@ -104,7 +104,7 @@ export async function shareBase64(context: Context, b64: string, name: string): 
   try {
     const bytes: Uint8Array = base64ToBytes(b64);
     const path: string = writeTempFile(context, name, bytes);
-    const uri: string = `file://${path}`;
+    const uri: string = fileUri.getUriFromPath(path);
     const ext: string = name.includes('.') ? `.${name.split('.').pop()}` : '.png';
     const utdId: string = utd.getUniformDataTypeByFilenameExtension(ext, utd.UniformDataType.IMAGE);
     const data = new systemShare.SharedData({

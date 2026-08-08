@@ -1048,12 +1048,14 @@ struct Index {
             .onClick(() => {
               const b: string = this.menuB64;
               const n: string = this.menuName;
-              this.closeImageMenu();
+              // 必须在 closeImageMenu 之前捕获 UIContext，否则菜单销毁后 UIContext 可能失效
               const hostCtx = this.getUIContext().getHostContext() as common.UIAbilityContext;
-              // 持有 Promise，防止 async 上下文被 GC 导致 ShareController 提前释放
+              this.closeImageMenu();
+              promptAction.showToast({ message: `正在分享 ${n}` });
               const p: Promise<void> = shareBase64(hostCtx, b, n);
               p.catch((err: BusinessError) => {
                 hilog.warn(DOMAIN, TAG, 'share promise err: %{public}s', JSON.stringify(err));
+                promptAction.showToast({ message: '分享失败：' + (err.message || '未知错误') });
               });
             })
             Divider()
