@@ -104,13 +104,18 @@ export async function shareBase64(context: Context, b64: string, name: string): 
     const bytes: Uint8Array = base64ToBytes(b64);
     const path: string = writeTempFile(context, name, bytes);
     const uri: string = `file://${path}`;
+    const ext: string = name.includes('.') ? `.${name.split('.').pop()}` : '.png';
+    const utdId: string = utd.getUniformDataTypeByFilenameExtension(ext, utd.UniformDataType.IMAGE);
     const data = new systemShare.SharedData({
-      utd: utd.UniformDataType.IMAGE,
+      utd: utdId,
       uri: uri,
       title: name
     });
     const controller = new systemShare.ShareController(data);
-    await controller.show(context as common.UIAbilityContext, {});
+    await controller.show(context as common.UIAbilityContext, {
+      selectionMode: systemShare.SelectionMode.SINGLE,
+      previewMode: systemShare.SharePreviewMode.DEFAULT
+    });
   } catch (e) {
     hilog.warn(DOMAIN, TAG, 'shareBase64 failed: %{public}s', JSON.stringify(e));
   }

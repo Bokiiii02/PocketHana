@@ -1049,7 +1049,8 @@ struct Index {
               const b: string = this.menuB64;
               const n: string = this.menuName;
               this.closeImageMenu();
-              shareBase64(getContext(this), b, n);
+              const hostCtx = this.getUIContext().getHostContext() as common.UIAbilityContext;
+              shareBase64(hostCtx, b, n);
             })
             Divider()
               .strokeWidth(0.5)
