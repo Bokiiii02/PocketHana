@@ -328,9 +328,12 @@ struct Index {
         `try{fitInput();new MutationObserver(fitInput).observe(document.body,{childList:true,subtree:true});}catch(e){}` +
         `}` +
         `if(!window.__hanakoDropHandler){window.__hanakoDropHandler=true;` +
-        `try{import('./app-file-drag-BXCTczfT.js').then(function(m){try{var ki=m.l;` +
-        `console.log('[hanako-drop] Ki test png='+String(ki('test.png'))+' bare='+String(ki('123'))+' jpg='+String(ki('a.jpg')));` +
-        `}catch(e){console.log('[hanako-drop] Ki call err '+String(e));}}).catch(function(e){console.log('[hanako-drop] import err '+String(e));});}catch(e){}` +
+        `try{fetch('./app-file-drag-BXCTczfT.js').then(function(r){return r.text();}).then(function(t){` +
+        `var def='notfound';var m=t.match(/function\s+l\s*\([^)]*\)\s*\{[^}]{0,300}/);` +
+        `if(m){def=m[0].slice(0,250);}else{var m2=t.match(/l\s*=\s*\([^)]*\)\s*=>[^,;]{0,200}/);` +
+        `if(m2){def=m2[0].slice(0,250);}}` +
+        `console.log('[hanako-drop] dragmod len='+t.length+' ki='+def);` +
+        `}).catch(function(e){console.log('[hanako-drop] fetchmod err '+String(e));});}catch(e){}` +
         `try{var of=window.fetch;window.fetch=function(){var url=arguments[0];` +
         `return of.apply(this,arguments).then(function(res){try{if(String(url).indexOf('upload-blob')>-1){` +
         `res.clone().json().then(function(d){var u=d&&d.uploads&&d.uploads[0];` +
