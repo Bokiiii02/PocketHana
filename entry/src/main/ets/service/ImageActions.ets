@@ -8,7 +8,7 @@ import { pasteboard } from '@kit.BasicServicesKit';
 import { image } from '@kit.ImageKit';
 import { uniformTypeDescriptor as utd } from '@kit.ArkData';
 import { systemShare } from '@kit.ShareKit';
-import { abilityAccessCtrl, common } from '@kit.AbilityKit';
+import { common } from '@kit.AbilityKit';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 
@@ -50,26 +50,17 @@ export function writeTempFile(context: Context, name: string, bytes: Uint8Array)
   return p;
 }
 
-/** 保存图片到图库（首次弹窗授权后免弹窗静默保存） */
+/** 保存图片到图库（PhotoViewPicker 系统图库保存框，无需权限） */
 export async function saveBase64ToLibrary(context: Context, b64: string, name: string): Promise<void> {
   try {
     const bytes: Uint8Array = base64ToBytes(b64);
-    const atManager = abilityAccessCtrl.createAtManager();
-    const tokenId: number = context.applicationInfo.accessTokenId;
-    const grant = await atManager.checkAccessToken(tokenId, 'ohos.permission.SHORT_TERM_WRITE_IMAGEVIDEO');
-    if (grant !== abilityAccessCtrl.GrantStatus.PERMISSION_GRANTED) {
-      await atManager.requestPermissionsFromUser(context, ['ohos.permission.SHORT_TERM_WRITE_IMAGEVIDEO']);
+    const photoPicker = new picker.PhotoViewPicker();
+    const uris: string[] = await photoPicker.save({ newFileNames: [name] });
+    if (uris.length > 0) {
+      const f = fileIo.openSync(uris[0], fileIo.OpenMode.READ_WRITE | fileIo.OpenMode.TRUNC);
+      fileIo.writeSync(f.fd, bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength));
+      fileIo.closeSync(f);
     }
-    const helper = photoAccessHelper.getPhotoAccessHelper(context);
-    const base: string = name.replace(/\.[^.]+$/, '');
-    const uri: string = await helper.createAssetWithShortTermPermission({
-      title: base.length > 0 ? base : `hanako_${Date.now()}`,
-      fileNameExtension: 'png',
-      photoType: photoAccessHelper.PhotoType.IMAGE
-    });
-    const f = fileIo.openSync(uri, fileIo.OpenMode.READ_WRITE | fileIo.OpenMode.TRUNC);
-    fileIo.writeSync(f.fd, bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength));
-    fileIo.closeSync(f);
     hilog.info(DOMAIN, TAG, 'saved to library: %{public}s', name);
   } catch (e) {
     hilog.warn(DOMAIN, TAG, 'saveBase64ToLibrary failed: %{public}s', JSON.stringify(e));
