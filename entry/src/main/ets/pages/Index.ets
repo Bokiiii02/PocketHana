@@ -14,7 +14,7 @@ import { scanBarcode } from '@kit.ScanKit';
 import { url } from '@kit.ArkTS';
 import { NotificationClient } from '../service/NotificationClient';
 import { readShare, clearShareSync, SharePayload, ShareFileItem } from '../service/ShareBridge';
-import { saveBase64ToGallery, copyBase64ToClipboard, shareBase64 } from '../service/ImageActions';
+import { saveBase64ToLibrary, copyBase64ToClipboard, shareBase64 } from '../service/ImageActions';
 import { toBase64, guessMime } from '../service/ShareUtil';
 import { unifiedDataChannel } from '@kit.ArkData';
 import { fileIo } from '@kit.CoreFileKit';
@@ -527,7 +527,7 @@ struct Index {
           }
           const fname: string = name.length > 0 ? name : `hanako_image_${Date.now()}.png`;
           if (!isMenu) {
-            saveBase64ToGallery(getContext(this), b64, fname);
+            saveBase64ToLibrary(getContext(this), b64, fname);
           } else {
             this.showImageMenu(b64, fname);
           }
@@ -550,7 +550,7 @@ struct Index {
         ]
       }).then((res: promptAction.ActionMenuSuccessResponse) => {
         if (res.index === 0) {
-          saveBase64ToGallery(getContext(this), b64, name);
+          saveBase64ToLibrary(getContext(this), b64, name);
         } else if (res.index === 1) {
           copyBase64ToClipboard(b64);
         } else if (res.index === 2) {

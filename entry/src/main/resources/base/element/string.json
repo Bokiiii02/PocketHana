@@ -11,6 +11,10 @@
     {
       "name": "EntryAbility_label",
       "value": "label"
+    },
+    {
+      "name": "reason_save_image",
+      "value": "保存图片到系统图库"
     }
   ]
 }
