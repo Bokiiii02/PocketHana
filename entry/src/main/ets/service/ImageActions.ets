@@ -52,6 +52,7 @@ export function writeTempFile(context: Context, name: string, bytes: Uint8Array)
 
 /** 保存图片到图库（PhotoViewPicker 系统图库保存框，无需权限） */
 export async function saveBase64ToLibrary(context: Context, b64: string, name: string): Promise<void> {
+  hilog.info(DOMAIN, TAG, 'save library called: %{public}s', name);
   try {
     const bytes: Uint8Array = base64ToBytes(b64);
     const photoPicker = new picker.PhotoViewPicker();
@@ -69,6 +70,7 @@ export async function saveBase64ToLibrary(context: Context, b64: string, name: s
 
 /** 保存图片（系统保存对话框选择位置，写入目标文件，无需权限；用于附件类保存） */
 export async function saveBase64ToGallery(context: Context, b64: string, name: string): Promise<void> {
+  hilog.info(DOMAIN, TAG, 'save gallery(doc) called: %{public}s', name);
   try {
     const bytes: Uint8Array = base64ToBytes(b64);
     const docPicker = new picker.DocumentViewPicker(context);
