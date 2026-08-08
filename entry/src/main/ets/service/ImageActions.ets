@@ -100,6 +100,7 @@ export async function copyBase64ToClipboard(b64: string): Promise<void> {
 
 /** 系统分享图片 */
 export async function shareBase64(context: Context, b64: string, name: string): Promise<void> {
+  hilog.info(DOMAIN, TAG, 'share called: %{public}s', name);
   try {
     const bytes: Uint8Array = base64ToBytes(b64);
     const path: string = writeTempFile(context, name, bytes);

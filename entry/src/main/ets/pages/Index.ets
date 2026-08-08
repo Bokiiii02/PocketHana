@@ -1050,7 +1050,11 @@ struct Index {
               const n: string = this.menuName;
               this.closeImageMenu();
               const hostCtx = this.getUIContext().getHostContext() as common.UIAbilityContext;
-              shareBase64(hostCtx, b, n);
+              // 持有 Promise，防止 async 上下文被 GC 导致 ShareController 提前释放
+              const p: Promise<void> = shareBase64(hostCtx, b, n);
+              p.catch((err: BusinessError) => {
+                hilog.warn(DOMAIN, TAG, 'share promise err: %{public}s', JSON.stringify(err));
+              });
             })
             Divider()
               .strokeWidth(0.5)
