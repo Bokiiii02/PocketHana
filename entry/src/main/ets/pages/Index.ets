@@ -384,13 +384,6 @@ struct Index {
       this.lastShareSeq = data.seq;
       // 同步清空（防重复）+ 注入，失败写回重试
       clearShareSync(getContext(this));
-      if (data.tooMany) {
-        try {
-          promptAction.showToast({ message: '最多只能上传10张图片哦' });
-        } catch (e) {
-          hilog.warn(DOMAIN, TAG, 'toast error: %{public}s', JSON.stringify(e));
-        }
-      }
       if (data.text.length > 0) {
         hilog.info(DOMAIN, TAG, 'share text inject seq=%{public}d', data.seq);
         this.injectTextToEditor(data.text);

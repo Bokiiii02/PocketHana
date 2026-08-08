@@ -19,7 +19,7 @@ import { window } from '@kit.ArkUI';
 import { systemShare } from '@kit.ShareKit';
 import { fileIo } from '@kit.CoreFileKit';
 import { BusinessError } from '@kit.BasicServicesKit';
-import { writeShareFiles, writeShareText, markTooMany, ShareFileItem } from '../service/ShareBridge';
+import { writeShareFiles, writeShareText, ShareFileItem } from '../service/ShareBridge';
 import { toBase64, guessMime, detectImageType, extForType } from '../service/ShareUtil';
 
 const DOMAIN = 0x0000;
@@ -58,7 +58,6 @@ export default class EntryAbility extends UIAbility {
         let text: string = '';
         if (records.length > 10) {
           hilog.warn(SHARE_DOMAIN, SHARE_TAG, 'share too many: %{public}d, keep first 10', records.length);
-          markTooMany(this.context);
         }
         const take: number = Math.min(records.length, 10);
         for (let i = 0; i < take; i++) {
