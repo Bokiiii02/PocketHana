@@ -14,6 +14,7 @@ import { scanBarcode } from '@kit.ScanKit';
 import { url } from '@kit.ArkTS';
 import { NotificationClient } from '../service/NotificationClient';
 import { readShare, clearShareSync, SharePayload, ShareFileItem } from '../service/ShareBridge';
+import { saveBase64ToGallery, copyBase64ToClipboard, shareBase64 } from '../service/ImageActions';
 import { toBase64, guessMime } from '../service/ShareUtil';
 import { unifiedDataChannel } from '@kit.ArkData';
 import { fileIo } from '@kit.CoreFileKit';
@@ -347,6 +348,26 @@ struct Index {
         `}).catch(function(err){console.log('[hanako-drop] read fail '+String(err));});` +
         `}catch(x){}},true);` +
         `}` +
+        `if(!window.__hanakoImageInit){window.__hanakoImageInit=true;` +
+        `document.addEventListener('click',function(e){try{var el=e.target;var a=el&&el.closest?el.closest('a[download]'):null;var url='';` +
+        `if(a&&a.href){url=a.href;}else{var dl=el&&el.closest?el.closest('[class*="download"],[class*="Download"],[class*="save"],[class*="Save"]'):null;` +
+        `if(dl){var card=dl.closest('[class*="message"],[class*="card"],[class*="image"],[class*="bubble"]');` +
+        `var img=card?card.querySelector('img'):null;if(img&&img.src){url=img.src;}}}` +
+        `if(!url)return;var p=url.indexOf('blob:')===0?fetch(url):fetch(url,{credentials:'include'});` +
+        `p.then(function(r){return r.blob();}).then(function(b){return new Promise(function(res){var fr=new FileReader();fr.onload=function(){res(fr.result);};fr.readAsDataURL(b);});})` +
+        `.then(function(d){var c=d.indexOf(',');var b64=c>=0?d.slice(c+1):d;window.__hanakoImageB64=b64;` +
+        `window.__hanakoImageName='hanako_image_'+Date.now()+'.png';console.log('[hanako-img] ready save');}).catch(function(){});` +
+        `}catch(err){}},true);` +
+        `var lp=null;` +
+        `document.addEventListener('touchstart',function(e){try{var el=e.target;var img=el&&el.closest?el.closest('img'):null;` +
+        `if(img&&img.src){lp={src:img.src,t:Date.now()};}}catch(err){}},true);` +
+        `document.addEventListener('touchend',function(){if(lp&&Date.now()-lp.t>550){` +
+        `var src=lp.src;var p=src.indexOf('blob:')===0?fetch(src):fetch(src,{credentials:'include'});` +
+        `p.then(function(r){return r.blob();}).then(function(b){return new Promise(function(res){var fr=new FileReader();fr.onload=function(){res(fr.result);};fr.readAsDataURL(b);});})` +
+        `.then(function(d){var c=d.indexOf(',');var b64=c>=0?d.slice(c+1):d;window.__hanakoImageB64=b64;` +
+        `window.__hanakoImageName='hanako_image_'+Date.now()+'.png';console.log('[hanako-img] ready menu');}).catch(function(){});` +
+        `}lp=null;},true);` +
+        `}` +
         `})()`;
       this.controller.runJavaScript(script).catch((err: BusinessError) => {
         hilog.warn(DOMAIN, TAG, 'injectUiFixes failed: %{public}s', JSON.stringify(err));
@@ -492,6 +513,54 @@ struct Index {
       }
     } catch (e) {
       hilog.warn(DOMAIN, TAG, 'injectFilesToPage error: %{public}s', JSON.stringify(e));
+    }
+  }
+
+  /** 读取页面注入的图片数据（base64）并按动作处理 */
+  private handleImageData(isMenu: boolean): void {
+    try {
+      this.controller.runJavaScript('window.__hanakoImageB64||""').then((b64: string) => {
+        this.controller.runJavaScript('window.__hanakoImageName||""').then((name: string) => {
+          this.controller.runJavaScript('window.__hanakoImageB64=""');
+          if (b64.length === 0) {
+            return;
+          }
+          const fname: string = name.length > 0 ? name : `hanako_image_${Date.now()}.png`;
+          if (!isMenu) {
+            saveBase64ToGallery(getContext(this), b64, fname);
+          } else {
+            this.showImageMenu(b64, fname);
+          }
+        });
+      });
+    } catch (e) {
+      hilog.warn(DOMAIN, TAG, 'handleImageData error: %{public}s', JSON.stringify(e));
+    }
+  }
+
+  /** 长按图片弹出操作菜单（保存/复制/分享） */
+  private showImageMenu(b64: string, name: string): void {
+    try {
+      promptAction.showActionMenu({
+        title: '图片操作',
+        buttons: [
+          { text: '保存到相册', color: '#c9a06c' },
+          { text: '复制图片', color: '#333333' },
+          { text: '分享', color: '#333333' }
+        ]
+      }).then((res: promptAction.ActionMenuSuccessResponse) => {
+        if (res.index === 0) {
+          saveBase64ToGallery(getContext(this), b64, name);
+        } else if (res.index === 1) {
+          copyBase64ToClipboard(b64);
+        } else if (res.index === 2) {
+          shareBase64(getContext(this), b64, name);
+        }
+      }).catch((err: BusinessError) => {
+        hilog.warn(DOMAIN, TAG, 'menu canceled: %{public}s', JSON.stringify(err));
+      });
+    } catch (e) {
+      hilog.warn(DOMAIN, TAG, 'showImageMenu error: %{public}s', JSON.stringify(e));
     }
   }
 
@@ -655,9 +724,17 @@ struct Index {
           // 页面开始加载：清错误态，避免 reload 后白条停留在错误状态
           this.hasError = false;
         })
+        .onDownloadStart((event: OnDownloadStartEvent) => {
+          // ArkWeb 无系统下载：记录并尝试走注入拦截通道保存
+          hilog.info(DOMAIN, TAG, 'download start: %{public}s', (event.url || '').slice(0, 150));
+        })
         .onConsole((event: OnConsoleEvent) => {
           const msg: string = event.message.getMessage();
-          if (msg.startsWith('[hanako-drop]')) {
+          if (msg.startsWith('[hanako-img]')) {
+            hilog.info(DOMAIN, TAG, 'img event: %{public}s', msg);
+            const isMenu: boolean = msg.indexOf('menu') > -1;
+            this.handleImageData(isMenu);
+          } else if (msg.startsWith('[hanako-drop]')) {
             hilog.info(DOMAIN, TAG, 'web drop probe: %{public}s', msg);
           } else {
             const lvl: string = String(event.message.getMessageLevel());
