@@ -18,6 +18,7 @@ import { hilog } from '@kit.PerformanceAnalysisKit';
 import { window } from '@kit.ArkUI';
 import { systemShare } from '@kit.ShareKit';
 import { fileIo } from '@kit.CoreFileKit';
+import { notificationManager } from '@kit.NotificationKit';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { writeShareFiles, writeShareText, ShareFileItem } from '../service/ShareBridge';
 import { toBase64, guessMime, detectImageType, extForType } from '../service/ShareUtil';
@@ -150,6 +151,17 @@ export default class EntryAbility extends UIAbility {
       mainWindow.setWindowBackgroundColor('#F7F1E7');
     } catch (err) {
       hilog.error(DOMAIN, 'testTag', 'Window config failed. Cause: %{public}s', JSON.stringify(err));
+    }
+
+    // 请求通知权限（推送通知显示的前提；用户拒绝时推送消息将无法展示）
+    try {
+      notificationManager.requestEnableNotification(this.context).then(() => {
+        hilog.info(DOMAIN, 'testTag', 'requestEnableNotification success');
+      }).catch((err: BusinessError) => {
+        hilog.warn(DOMAIN, 'testTag', 'requestEnableNotification failed: %{public}s', JSON.stringify(err));
+      });
+    } catch (err) {
+      hilog.warn(DOMAIN, 'testTag', 'requestEnableNotification error: %{public}s', JSON.stringify(err));
     }
 
     windowStage.loadContent('pages/Index', (err) => {
