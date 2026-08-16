@@ -19,6 +19,8 @@ export class NotificationClient {
   private static reconnectTimer: number = -1;
   private static reconnectAttempt: number = 0;
   private static notifySeq: number = 1;
+  // 强制重连节流：10 秒内最多一次
+  private static lastReconnectTs: number = 0;
 
   static get isConnected(): boolean {
     return NotificationClient.connected;
@@ -56,11 +58,18 @@ export class NotificationClient {
       const ws = webSocket.createWebSocket();
       NotificationClient.ws = ws;
       ws.on('open', () => {
+        // 代际防护：强制重连后旧连接迟到的回调不得覆盖新连接状态
+        if (NotificationClient.ws !== ws) {
+          return;
+        }
         NotificationClient.connected = true;
         NotificationClient.reconnectAttempt = 0;
         hilog.info(DOMAIN, TAG, 'notify ws open');
       });
       ws.on('message', (_err: BusinessError, data: string | ArrayBuffer) => {
+        if (NotificationClient.ws !== ws) {
+          return;
+        }
         if (typeof data !== 'string') {
           return;
         }
@@ -77,6 +86,9 @@ export class NotificationClient {
         }
       });
       ws.on('close', () => {
+        if (NotificationClient.ws !== ws) {
+          return;
+        }
         NotificationClient.connected = false;
         hilog.info(DOMAIN, TAG, 'notify ws close');
         if (!NotificationClient.closedByUser) {
@@ -84,6 +96,9 @@ export class NotificationClient {
         }
       });
       ws.on('error', (err: BusinessError) => {
+        if (NotificationClient.ws !== ws) {
+          return;
+        }
         NotificationClient.connected = false;
         hilog.warn(DOMAIN, TAG, 'notify ws error: %{public}s', JSON.stringify(err));
       });
@@ -106,6 +121,25 @@ export class NotificationClient {
       NotificationClient.connect(baseUrl).catch(() => {
       });
     }, delay);
+  }
+
+  /**
+   * 前台恢复/页面显示时调用：强制重建 WS（10 秒节流）。
+   * 应用长时间后台时 WebSocket 会被系统挂起且可能不触发 close，
+   * connected 标志残留为 true 造成假活连接，回前台强制重连兜底。
+   */
+  static async reconnect(baseUrl: string): Promise<void> {
+    if (baseUrl.length === 0) {
+      return;
+    }
+    const now: number = Date.now();
+    if (now - NotificationClient.lastReconnectTs < 10000) {
+      return;
+    }
+    NotificationClient.lastReconnectTs = now;
+    hilog.info(DOMAIN, TAG, 'notify force reconnect');
+    NotificationClient.disconnect();
+    await NotificationClient.connect(baseUrl);
   }
 
   /** 发布本地通知 */

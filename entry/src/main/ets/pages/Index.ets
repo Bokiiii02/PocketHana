@@ -25,10 +25,16 @@ const KEY_SERVER_URL: string = 'server_url';
 // 白条位置记忆：吸附边（'L'/'R'）+ 高度比例
 const KEY_BALL_EDGE: string = 'ball_edge';
 const KEY_BALL_Y: string = 'ball_y_ratio';
-// 白条吸附后中心距屏幕边缘的距离（vp，条宽 14 的一半，完全贴边）
+// 白条/悬浮球吸附后中心距屏幕边缘的距离（vp：条宽 14 / 球径 52 的一半，完全贴边）
 const BALL_EDGE_INSET: number = 7;
+const BALL_EDGE_INSET_ROUND: number = 26;
+// 白条手势热区（vp，视觉层居中，热区放大便于手指按住）
+const BALL_HIT_W: number = 56;
+const BALL_HIT_H: number = 100;
 // 白条拖动判定阈值（vp）：超过视为拖拽，未超过视为点击打开菜单
 const BALL_DRAG_DISTANCE: number = 8;
+// 悬浮球静置时长（毫秒）：静置不动自动变形为细条吸附边缘
+const BALL_IDLE_MS: number = 3000;
 // onErrorReceive 的 ERR_ABORTED：页面导航被主动中断（如 SPA 路由），不算失败
 const ERR_ABORTED: number = -3;
 // 超时类错误码（ArkWeb 网络协议栈错误列表）：用于区分错误页文案
@@ -66,11 +72,15 @@ struct Index {
   @State ballY: number = -1;
   // 白条拖动中（用于视觉反馈）
   @State ballDragging: boolean = false;
+  // 形态：true=悬浮球（拖动/静置初期），false=细条（静置后自动变形）
+  @State isBall: boolean = false;
   private screenW: number = 0;
   private screenH: number = 0;
   // 拖拽起点（白条中心点，vp）
   private dragOriginX: number = 0;
   private dragOriginY: number = 0;
+  // 悬浮球静置计时器
+  private idleTimer: number = -1;
   private colorTimer: number = -1;
   private loadTimer: number = -1;
   private lastBarColor: string = '';
@@ -91,6 +101,12 @@ struct Index {
   /** 页面每次显示（含从后台回前台、分享拉起）时立即消费分享数据 */
   onPageShow(): void {
     this.checkShare();
+    // 回前台：通知 WS 可能已被系统挂起（鸿蒙后台限制），强制重建（内部 10 秒节流）
+    if (this.currentUrl.length > 0 && this.isChatReady) {
+      NotificationClient.reconnect(this.currentUrl).catch((err: BusinessError) => {
+        hilog.warn(DOMAIN, TAG, 'notify reconnect failed: %{public}s', JSON.stringify(err));
+      });
+    }
   }
 
   aboutToDisappear(): void {
@@ -109,6 +125,7 @@ struct Index {
     }
     this.stopColorWatcher();
     this.stopLoadTimer();
+    this.stopIdleTimer();
     NotificationClient.disconnect();
   }
 
@@ -180,7 +197,7 @@ struct Index {
     }
     if (this.screenW > 0 && this.screenH > 0) {
       if (wasInit) {
-        this.ballX = wasLeft ? BALL_EDGE_INSET : this.screenW - BALL_EDGE_INSET;
+        this.ballX = wasLeft ? this.ballInset() : this.screenW - this.ballInset();
         this.ballY = this.clampBallY(yRatio * this.screenH);
       } else if (this.ballX < 0) {
         this.restoreBallPosition();
@@ -209,7 +226,7 @@ struct Index {
     if (edge !== 'L') {
       edge = 'R';
     }
-    this.ballX = edge === 'L' ? BALL_EDGE_INSET : this.screenW - BALL_EDGE_INSET;
+    this.ballX = edge === 'L' ? this.ballInset() : this.screenW - this.ballInset();
     this.ballY = this.clampBallY(ratio * this.screenH);
     hilog.info(DOMAIN, TAG, 'ball restored: edge=%{public}s x=%{public}d y=%{public}d', edge, this.ballX, this.ballY);
   }
@@ -225,13 +242,19 @@ struct Index {
     return Math.min(Math.max(y, minY), maxY);
   }
 
-  /** 拖拽松手：吸附到最近的屏幕边缘并记忆位置 */
+  /** 当前形态贴边距离（球半宽 26 / 条半宽 7） */
+  private ballInset(): number {
+    return this.isBall ? BALL_EDGE_INSET_ROUND : BALL_EDGE_INSET;
+  }
+
+  /** 拖拽松手：吸附到最近的屏幕边缘（按当前形态计算贴边距离）并记忆位置 */
   private snapBall(): void {
     if (this.screenW <= 0) {
       return;
     }
     const onLeft: boolean = this.ballX < this.screenW / 2;
-    const tx: number = onLeft ? BALL_EDGE_INSET : this.screenW - BALL_EDGE_INSET;
+    const inset: number = this.isBall ? BALL_EDGE_INSET_ROUND : BALL_EDGE_INSET;
+    const tx: number = onLeft ? inset : this.screenW - inset;
     const ty: number = this.clampBallY(this.ballY);
     // 推荐写法：UIContext.animateTo（全局 animateTo 已废弃）
     this.getUIContext().animateTo({ duration: 200, curve: Curve.EaseOut }, () => {
@@ -239,6 +262,37 @@ struct Index {
       this.ballY = ty;
     });
     this.saveBallPosition(onLeft, ty);
+  }
+
+  /**
+   * 悬浮球静置计时：静置 BALL_IDLE_MS 后自动变形为细条并重新贴边。
+   * 拖动中 / 设置菜单打开时跳过，由对应流程重新启动计时。
+   */
+  private restartIdleTimer(): void {
+    this.stopIdleTimer();
+    this.idleTimer = setTimeout(() => {
+      this.idleTimer = -1;
+      if (this.ballDragging || this.showSettings) {
+        return;
+      }
+      if (this.isBall) {
+        const onLeft: boolean = this.ballX < this.screenW / 2;
+        const ty: number = this.clampBallY(this.ballY);
+        this.getUIContext().animateTo({ duration: 260, curve: Curve.EaseInOut }, () => {
+          this.isBall = false;
+          this.ballX = onLeft ? BALL_EDGE_INSET : this.screenW - BALL_EDGE_INSET;
+          this.ballY = ty;
+        });
+        this.saveBallPosition(onLeft, ty);
+      }
+    }, BALL_IDLE_MS);
+  }
+
+  private stopIdleTimer(): void {
+    if (this.idleTimer !== -1) {
+      clearTimeout(this.idleTimer);
+      this.idleTimer = -1;
+    }
   }
 
   /** 记忆白条位置：吸附边 + 高度比例（屏幕尺寸变化后按比例恢复） */
@@ -423,7 +477,14 @@ struct Index {
         `*{scrollbar-width:none!important}` +
         `._folderHistoryDivider_737c7{display:none!important}` +
         `._workspaceHeader ._workspaceTitle{flex:1 1 auto!important;min-width:0!important;white-space:nowrap!important;overflow:hidden!important;text-overflow:ellipsis!important}` +
-        `._workspaceHeader{padding-right:16px!important}`;
+        `._workspaceHeader{padding-right:16px!important}` +
+        // 会话条目操作按钮常显（电脑端靠 hover 显示，移动端无 hover）：
+        // 归档/重命名按钮放大到 24x24 并始终可见，标题区让位
+        `[class*="sessionRenameBtn"],[class*="sessionArchiveBtn"]{opacity:0.75!important;width:24px!important;height:24px!important;bottom:6px!important}` +
+        `[class*="sessionRenameBtn"]{right:32px!important}` +
+        `[class*="sessionArchiveBtn"]{right:6px!important}` +
+        `[class*="sessionRenameBtn"] svg,[class*="sessionArchiveBtn"] svg{width:15px!important;height:15px!important}` +
+        `[class*="sessionItemHeader"]{padding-right:60px!important}`;
       const script: string =
         `(()=>{` +
         `try{var st=document.querySelector('style[data-hanako-shell="ui-fixes"]');if(!st){st=document.createElement('style');st.setAttribute('data-hanako-shell','ui-fixes');document.head.appendChild(st);}st.textContent=${JSON.stringify(css)};}catch(e){}` +
@@ -510,9 +571,10 @@ struct Index {
     this.showSettings = true;
   }
 
-  /** 关闭设置菜单（白条留在原位） */
+  /** 关闭设置菜单（白条留在原位；悬浮球恢复静置计时，稍后自动变形为条） */
   private closeSettingsPanel(): void {
     this.showSettings = false;
+    this.restartIdleTimer();
   }
 
   /** 系统分享：从 Preferences 读取分享内容注入页面（文本填入输入框 / 文件走 base64 注入通道） */
@@ -990,7 +1052,8 @@ struct Index {
         .backgroundColor(this.bgColor)
       }
 
-      // 首次连接加载页（图标严格居中，与启动窗口图标位置一致；加载指示固定在图标下方）
+      // 加载封面（与系统启动窗口同一图标同一背景，视觉无缝衔接为一个封面；
+      // 页面 onPageEnd 后自然消失，不再叠加额外的加载指示与文字）
       if (this.isLoading && !this.hasError) {
         Stack() {
           // 背景层
@@ -998,27 +1061,13 @@ struct Index {
             .width('100%')
             .height('100%')
             .backgroundColor(this.bgColor)
-          // 图标：屏幕正中心
+          // 图标：屏幕正中心（与启动窗口图标一致）
           Image($r('app.media.startIcon'))
-            .width(160)
-            .height(160)
-            .borderRadius(36)
+            .width(96)
+            .height(96)
+            .borderRadius(22)
             .position({ x: '50%', y: '50%' })
             .markAnchor({ x: '50%', y: '50%' })
-          // 加载指示：图标下方固定位置
-          Column() {
-            LoadingProgress()
-              .width(36)
-              .height(36)
-              .color('#c9a06c')
-            Text('Hana酱正在启动QwQ')
-              .fontSize(14)
-              .fontColor('#8a7a5c')
-              .margin({ top: 10 })
-          }
-          .position({ x: '50%', y: '50%' })
-          .markAnchor({ x: '50%', y: '50%' })
-          .translate({ y: 118 })
         }
         .width('100%')
         .height('100%')
@@ -1065,46 +1114,96 @@ struct Index {
         .justifyContent(FlexAlign.Center)
         .width('100%')
         .height('100%')
+        .padding({ left: 48, right: 48 })
         .backgroundColor('#F7F1E7')
         .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
       }
 
-      // 白条：吸附屏幕左/右边缘，可拖拽到任意高度；点击打开居中的设置菜单；菜单打开时隐藏
+      // 悬浮球：拖动时为光感球，静置 3 秒自动变形为细条吸附边缘；点击打开设置菜单；菜单打开时隐藏。
+      // 外层透明热区（56x100）绑手势；互斥手势组显式仲裁点击/拖拽
       if (this.isChatReady && !this.hasError && !this.showSettings) {
-        Button() {
-          Text('')
-            .width(1)
+        Stack() {
+          // 视觉层：球/条变形（属性动画过渡）
+          Stack() {
+            // 顶部高光（玻璃光感，球形态可见）
+            Row()
+              .width(52)
+              .height(52)
+              .borderRadius(26)
+              .linearGradient({
+                angle: 160,
+                colors: [['#B3FFFFFF', 0.0], ['#00FFFFFF', 0.45], ['#00FFFFFF', 1.0]]
+              })
+              .opacity(this.isBall ? 1 : 0)
+            // 暖色光晕（球形态可见）
+            Row()
+              .width(52)
+              .height(52)
+              .borderRadius(26)
+              .linearGradient({
+                angle: 315,
+                colors: [['#33F0C08A', 0.0], ['#00F0C08A', 0.55], ['#00F0C08A', 1.0]]
+              })
+              .opacity(this.isBall ? 1 : 0)
+            // 球内图标（Hanako 头像，球形态可见）
+            Image($r('app.media.startIcon'))
+              .width(34)
+              .height(34)
+              .borderRadius(17)
+              .opacity(this.isBall ? 1 : 0)
+              .scale({ x: this.isBall ? 1 : 0.3, y: this.isBall ? 1 : 0.3 })
+          }
+          .width(this.isBall ? 52 : 14)
+          .height(this.isBall ? 52 : 76)
+          .borderRadius(this.isBall ? 26 : 7)
+          .backgroundColor(this.isBall ? '#FCF8F1' : '#FBF6EC')
+          .opacity(this.ballDragging ? 1 : 0.92)
+          .border({ width: 1, color: this.isBall ? '#80FFFFFF' : '#00000000' })
+          .shadow({
+            radius: this.isBall ? 16 : 6,
+            color: this.isBall ? '#40C9A06C' : '#22000000',
+            offsetY: this.isBall ? 4 : 2
+          })
+          .clip(true)
+          .animation({ duration: 280, curve: Curve.EaseInOut })
         }
-        .width(14)
-        .height(76)
-        .borderRadius(7)
-        .backgroundColor('#FBF6EC')
-        .opacity(this.ballDragging ? 1.0 : 0.75)
+        .width(BALL_HIT_W)
+        .height(BALL_HIT_H)
         .position({ x: this.ballX, y: this.ballY })
         .markAnchor({ x: '50%', y: '50%' })
-        .shadow({ radius: 6, color: '#22000000', offsetY: 2 })
-        .onClick(() => {
-          this.openSettingsPanel();
-        })
         .gesture(
-          PanGesture({ direction: PanDirection.All, distance: BALL_DRAG_DISTANCE })
-            .onActionStart(() => {
-              this.ballDragging = true;
-              this.dragOriginX = this.ballX;
-              this.dragOriginY = this.ballY;
-            })
-            .onActionUpdate((event) => {
-              this.ballX = this.dragOriginX + event.offsetX;
-              this.ballY = this.dragOriginY + event.offsetY;
-            })
-            .onActionEnd(() => {
-              this.ballDragging = false;
-              this.snapBall();
-            })
-            .onActionCancel(() => {
-              this.ballDragging = false;
-              this.snapBall();
-            })
+          GestureGroup(GestureMode.Exclusive,
+            TapGesture({ count: 1 })
+              .onAction(() => {
+                this.stopIdleTimer();
+                this.openSettingsPanel();
+              }),
+            PanGesture({ direction: PanDirection.All, distance: BALL_DRAG_DISTANCE })
+              .onActionStart(() => {
+                hilog.info(DOMAIN, TAG, 'ball drag start x=%{public}d y=%{public}d', this.ballX, this.ballY);
+                this.stopIdleTimer();
+                this.isBall = true;
+                this.ballDragging = true;
+                this.dragOriginX = this.ballX;
+                this.dragOriginY = this.ballY;
+              })
+              .onActionUpdate((event) => {
+                this.ballX = this.dragOriginX + event.offsetX;
+                this.ballY = this.dragOriginY + event.offsetY;
+              })
+              .onActionEnd(() => {
+                hilog.info(DOMAIN, TAG, 'ball drag end x=%{public}d y=%{public}d', this.ballX, this.ballY);
+                this.ballDragging = false;
+                this.snapBall();
+                this.restartIdleTimer();
+              })
+              .onActionCancel(() => {
+                hilog.info(DOMAIN, TAG, 'ball drag cancel');
+                this.ballDragging = false;
+                this.snapBall();
+                this.restartIdleTimer();
+              })
+          )
         )
       }
 
@@ -1309,7 +1408,7 @@ struct Index {
       this.updateStatusBarHeight();
       if (w > 0 && h > 0) {
         if (wasInit) {
-          this.ballX = wasLeft ? BALL_EDGE_INSET : w - BALL_EDGE_INSET;
+          this.ballX = wasLeft ? this.ballInset() : w - this.ballInset();
           this.ballY = this.clampBallY(yRatio * h);
         } else if (this.ballX < 0 || this.ballY < 0) {
           // 窗口属性也未能定位：首次恢复（记忆位置或默认右缘 55%）
