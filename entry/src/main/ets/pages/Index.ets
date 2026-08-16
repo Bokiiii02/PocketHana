@@ -34,7 +34,7 @@ const BALL_HIT_W_BAR: number = 22;
 const BALL_HIT_H: number = 100;
 const BALL_HIT_H_BAR: number = 92;
 // 白条拖动判定阈值（vp）：超过视为拖拽，未超过视为点击打开菜单
-const BALL_DRAG_DISTANCE: number = 8;
+const BALL_DRAG_DISTANCE: number = 5;
 // 悬浮球静置时长（毫秒）：静置不动自动变形为细条吸附边缘
 const BALL_IDLE_MS: number = 3000;
 // onErrorReceive 的 ERR_ABORTED：页面导航被主动中断（如 SPA 路由），不算失败
@@ -1223,13 +1223,15 @@ struct Index {
             offsetY: this.isBall ? 4 : 2
           })
           .clip(true)
-          .animation({ duration: 280, curve: Curve.EaseInOut })
+          // 拖动中动画时长归零：位置即时跟手；松手后恢复 280ms 做球/条变形过渡
+          .animation({ duration: this.ballDragging ? 0 : 280, curve: Curve.EaseInOut })
         }
         .width(this.isBall ? BALL_HIT_W : BALL_HIT_W_BAR)
         .height(this.isBall ? BALL_HIT_H : BALL_HIT_H_BAR)
         .position({ x: this.ballX, y: this.ballY })
         .markAnchor({ x: '50%', y: '50%' })
-        .animation({ duration: 280, curve: Curve.EaseInOut })
+        // 拖动中动画时长归零：热区跟随手指不滞后
+        .animation({ duration: this.ballDragging ? 0 : 280, curve: Curve.EaseInOut })
         .gesture(
           GestureGroup(GestureMode.Exclusive,
             TapGesture({ count: 1 })
