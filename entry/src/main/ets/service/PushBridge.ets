@@ -51,4 +51,32 @@ export class PushBridge {
       hilog.warn(DOMAIN, TAG, 'token register failed: %{public}s', JSON.stringify(e));
     }
   }
+
+  /** 前台存活心跳：告诉服务端「手机在线」，插件据此跳过推送（避免与 WS 即时通知重复）。失败静默。 */
+  static async heartbeat(baseUrl: string): Promise<void> {
+    if (baseUrl.length === 0) {
+      return;
+    }
+    try {
+      const url: string = baseUrl.replace(/\/mobile\/?$/, '') + '/api/plugins/huawei-push/heartbeat';
+      const cookie: string = webview.WebCookieManager.getCookie(baseUrl);
+      const req = http.createHttp();
+      const opt: http.HttpRequestOptions = {
+        method: http.RequestMethod.POST,
+        readTimeout: 5000,
+        connectTimeout: 5000,
+        header: { 'Content-Type': 'application/json' },
+      };
+      if (cookie.length > 0) {
+        opt.header = { 'Content-Type': 'application/json', 'Cookie': cookie };
+      }
+      const resp = await req.request(url, opt);
+      req.destroy();
+      if (resp.responseCode !== 200) {
+        hilog.warn(DOMAIN, TAG, 'heartbeat resp=%{public}d', resp.responseCode);
+      }
+    } catch (e) {
+      // 心跳失败静默（下次再试）
+    }
+  }
 }

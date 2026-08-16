@@ -87,6 +87,8 @@ struct Index {
   @State iconSizeVp: number = 85;
   // 悬浮球静置计时器
   private idleTimer: number = -1;
+  // 推送心跳节流时间戳
+  private lastHeartbeatTs: number = 0;
   // 服务器地址输入框控制器（面板出现时定位光标）
   private serverInputCtrl: TextInputController = new TextInputController();
   private colorTimer: number = -1;
@@ -435,7 +437,21 @@ struct Index {
       this.readPageBackground();
       this.checkLoggedIn();
       this.checkShare();
+      this.beatPushHeartbeat();
     }, COLOR_POLL_MS);
+  }
+
+  /** 前台推送心跳（20 秒节流）：告知服务端手机在线，插件跳过推送避免与 WS 通知重复 */
+  private beatPushHeartbeat(): void {
+    const now: number = Date.now();
+    if (now - this.lastHeartbeatTs < 20000) {
+      return;
+    }
+    this.lastHeartbeatTs = now;
+    if (this.currentUrl.length > 0 && this.isChatReady) {
+      PushBridge.heartbeat(this.currentUrl).catch(() => {
+      });
+    }
   }
 
   private stopColorWatcher(): void {
