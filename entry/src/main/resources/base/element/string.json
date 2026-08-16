@@ -2,11 +2,11 @@
   "string": [
     {
       "name": "module_desc",
-      "value": "module description"
+      "value": "Hanako 移动端连接模块"
     },
     {
       "name": "EntryAbility_desc",
-      "value": "description"
+      "value": "连接电脑端 Hanako 的移动伴侣"
     },
     {
       "name": "EntryAbility_label",

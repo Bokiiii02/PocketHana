@@ -72,13 +72,16 @@ struct Index {
   @State ballY: number = -1;
   // 白条拖动中（用于视觉反馈）
   @State ballDragging: boolean = false;
-  // 形态：true=悬浮球（拖动/静置初期），false=细条（静置后自动变形）
-  @State isBall: boolean = false;
+  // 形态：true=悬浮球（启动默认球态/拖动中），false=细条（静置后自动变形）
+  @State isBall: boolean = true;
   private screenW: number = 0;
   private screenH: number = 0;
   // 拖拽起点（白条中心点，vp）
   private dragOriginX: number = 0;
   private dragOriginY: number = 0;
+  // 加载封面图标尺寸（vp）：与启动窗口图标视觉一致。
+  // startWindowIcon 按图片像素显示（256px），vp 尺寸 = 256 / 屏幕密度
+  @State iconSizeVp: number = 85;
   // 悬浮球静置计时器
   private idleTimer: number = -1;
   private colorTimer: number = -1;
@@ -194,6 +197,13 @@ struct Index {
     if (w > 0 && h > 0) {
       this.screenW = this.getUIContext().px2vp(w);
       this.screenH = this.getUIContext().px2vp(h);
+      // 屏幕密度（px/vp）：用于让加载封面图标与启动窗口图标（按 256px 像素显示）视觉一致
+      if (this.screenW > 0) {
+        const d: number = w / this.screenW;
+        if (d > 0) {
+          this.iconSizeVp = Math.round(256 / d);
+        }
+      }
     }
     if (this.screenW > 0 && this.screenH > 0) {
       if (wasInit) {
@@ -484,7 +494,9 @@ struct Index {
         `[class*="sessionRenameBtn"]{right:32px!important}` +
         `[class*="sessionArchiveBtn"]{right:6px!important}` +
         `[class*="sessionRenameBtn"] svg,[class*="sessionArchiveBtn"] svg{width:15px!important;height:15px!important}` +
-        `[class*="sessionItemHeader"]{padding-right:60px!important}`;
+        `[class*="sessionItemHeader"]{padding-right:88px!important}` +
+        // 壳注入的置顶按钮（📌）：右侧第三位，常显
+        `[class*="hanakoPinBtn"]{position:absolute!important;bottom:6px!important;right:60px!important;width:24px!important;height:24px!important;display:flex!important;align-items:center!important;justify-content:center!important;font-size:13px!important;border-radius:4px!important;z-index:2!important;opacity:0.45!important;pointer-events:auto!important}`;
       const script: string =
         `(()=>{` +
         `try{var st=document.querySelector('style[data-hanako-shell="ui-fixes"]');if(!st){st=document.createElement('style');st.setAttribute('data-hanako-shell','ui-fixes');document.head.appendChild(st);}st.textContent=${JSON.stringify(css)};}catch(e){}` +
@@ -503,6 +515,50 @@ struct Index {
         `const fitInput=()=>{const els=document.querySelectorAll('textarea');for(const el of els){if(el.__hanakoFit)continue;el.__hanakoFit=true;const up=()=>{el.style.height='auto';const h=el.scrollHeight;el.style.height=(h>0?h+2:44)+'px';};el.addEventListener('input',up);el.addEventListener('focus',up);up();}};` +
         `try{fitInput();new MutationObserver(fitInput).observe(document.body,{childList:true,subtree:true});}catch(e){}` +
         `}` +
+        `if(!window.__hanakoPinInit){window.__hanakoPinInit=true;` +
+        `var PIN_KEY='hanako_pinned_paths';` +
+        `var readPins=function(){try{return JSON.parse(localStorage.getItem(PIN_KEY)||'[]');}catch(e){return [];}};` +
+        `var writePins=function(p){try{localStorage.setItem(PIN_KEY,JSON.stringify(p));}catch(e){}};` +
+        `var reorderPins=function(){var pins=readPins();if(!pins.length)return;` +
+        `for(var i=0;i<pins.length;i++){var item=document.querySelector('[data-session-path="'+pins[i]+'"]');` +
+        `if(!item)continue;var list=item.parentElement;` +
+        `if(list&&list.firstElementChild!==item){list.insertBefore(item,list.firstElementChild);}}};` +
+        `var updatePinVisual=function(){var pins=readPins();` +
+        `var bs=document.querySelectorAll('[class*="hanakoPinBtn"]');` +
+        `for(var j=0;j<bs.length;j++){var p=bs[j].getAttribute('data-pin-path');` +
+        `bs[j].style.opacity=(p&&pins.indexOf(p)>-1)?'1':'0.45';}};` +
+        `var ensurePinBtns=function(){` +
+        `var items=document.querySelectorAll('[data-session-path]');` +
+        `for(var k=0;k<items.length;k++){var item=items[k];` +
+        `if(item.querySelector('[class*="hanakoPinBtn"]'))continue;` +
+        `var path=item.getAttribute('data-session-path')||'';` +
+        `var btn=document.createElement('div');` +
+        `btn.className='hanakoPinBtn';` +
+        `btn.setAttribute('data-pin-path',path);` +
+        `btn.textContent='\\u{1F4CC}';` +
+        `btn.addEventListener('click',function(e){e.preventDefault();e.stopPropagation();` +
+        `var pins=readPins();var path2=this.getAttribute('data-pin-path');` +
+        `var idx=pins.indexOf(path2);` +
+        `if(idx>-1){pins.splice(idx,1);}else{pins.unshift(path2);}` +
+        `writePins(pins);reorderPins();updatePinVisual();});` +
+        `item.appendChild(btn);}` +
+        `updatePinVisual();};` +
+        `try{ensurePinBtns();new MutationObserver(ensurePinBtns).observe(document.body,{childList:true,subtree:true});}catch(e){}` +
+        `try{reorderPins();new MutationObserver(reorderPins).observe(document.body,{childList:true,subtree:true});}catch(e){}` +
+        `}` +
+        `if(!window.__hanakoBtnProbe){window.__hanakoBtnProbe=true;` +
+        `var probeReport=function(){` +
+        `var a=document.querySelector('[data-session-path]');` +
+        `if(a){var ab=a.querySelector('[class*="sessionArchiveBtn"]');var rb=a.querySelector('[class*="sessionRenameBtn"]');` +
+        `var kids=a.children;var cls=[];` +
+        `for(var c=0;c<kids.length;c++){cls.push(String(kids[c].className||kids[c].tagName));}` +
+        `console.log('[hanako-probe] item='+a.className+' archive='+(ab?ab.className:'MISSING')+' rename='+(rb?rb.className:'MISSING')+' children='+cls.join('|'));` +
+        `if(ab&&!ab.__probeHooked){ab.__probeHooked=true;` +
+        `ab.addEventListener('click',function(e){console.log('[hanako-probe] archive clicked, defaultPrevented='+e.defaultPrevented);});` +
+        `ab.addEventListener('touchstart',function(){console.log('[hanako-probe] archive touchstart');},{passive:true});}}` +
+        `else{console.log('[hanako-probe] no session item');}};` +
+        `setTimeout(probeReport,4000);` +
+        `setInterval(probeReport,15000);}` +
         `if(!window.__hanakoDropHandler){window.__hanakoDropHandler=true;` +
         `window.addEventListener('drop',function(e){try{var dt=e.dataTransfer;if(!dt){return;}` +
         `var txt='';try{txt=dt.getData('text/plain')||'';}catch(x){}` +
@@ -941,6 +997,8 @@ struct Index {
             return;
           }
           this.isChatReady = true;
+          // 白条出现后启动静置计时：默认球态静置 3 秒自动变形为细条
+          this.restartIdleTimer();
           this.injectUiFixes();
           this.readPageBackground();
           this.checkLoggedIn();
@@ -1023,9 +1081,8 @@ struct Index {
       if (this.currentUrl.length === 0 && !this.hasError) {
         Column() {
           Image($r('app.media.startIcon'))
-            .width(96)
-            .height(96)
-            .borderRadius(22)
+            .width(this.iconSizeVp)
+            .height(this.iconSizeVp)
           Text('欢迎使用 Hanako')
             .fontSize(22)
             .fontWeight(FontWeight.Bold)
@@ -1052,7 +1109,7 @@ struct Index {
         .backgroundColor(this.bgColor)
       }
 
-      // 加载封面（与系统启动窗口同一图标同一背景，视觉无缝衔接为一个封面；
+      // 加载封面（与系统启动窗口同一图标同一背景同一尺寸，视觉无缝衔接为一个封面；
       // 页面 onPageEnd 后自然消失，不再叠加额外的加载指示与文字）
       if (this.isLoading && !this.hasError) {
         Stack() {
@@ -1061,11 +1118,10 @@ struct Index {
             .width('100%')
             .height('100%')
             .backgroundColor(this.bgColor)
-          // 图标：屏幕正中心（与启动窗口图标一致）
+          // 图标：屏幕正中心（尺寸按密度匹配启动窗口 256px 图标）
           Image($r('app.media.startIcon'))
-            .width(96)
-            .height(96)
-            .borderRadius(22)
+            .width(this.iconSizeVp)
+            .height(this.iconSizeVp)
             .position({ x: '50%', y: '50%' })
             .markAnchor({ x: '50%', y: '50%' })
         }
@@ -1145,18 +1201,17 @@ struct Index {
                 colors: [['#33F0C08A', 0.0], ['#00F0C08A', 0.55], ['#00F0C08A', 1.0]]
               })
               .opacity(this.isBall ? 1 : 0)
-            // 球内图标（Hanako 头像，球形态可见）
-            Image($r('app.media.startIcon'))
-              .width(34)
-              .height(34)
-              .borderRadius(17)
+            // 球内设置图标（球形态可见）
+            SymbolGlyph($r('sys.symbol.gearshape'))
+              .fontSize(24)
+              .fontColor(['#8a7a5c'])
               .opacity(this.isBall ? 1 : 0)
               .scale({ x: this.isBall ? 1 : 0.3, y: this.isBall ? 1 : 0.3 })
           }
           .width(this.isBall ? 52 : 14)
           .height(this.isBall ? 52 : 76)
           .borderRadius(this.isBall ? 26 : 7)
-          .backgroundColor(this.isBall ? '#FCF8F1' : '#FBF6EC')
+          .backgroundColor(this.isBall ? '#99FCF8F1' : '#FBF6EC')
           .opacity(this.ballDragging ? 1 : 0.92)
           .border({ width: 1, color: this.isBall ? '#80FFFFFF' : '#00000000' })
           .shadow({
