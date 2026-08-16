@@ -7,11 +7,11 @@
         "material": {
           "certpath": "C:\\Users\\Noisy\\.ohos\\config\\default_HanakoMobile_A8NKObHsLVQgBN08xPB2vLk2lwFbZqVntyGFyp6mKqc=.cer",
           "keyAlias": "debugKey",
-          "keyPassword": "0000001BC671FD2E3C061069167873D8F7AB1EA93681BCE2EAF077055D420B66F06B00F920543979DF5B38",
+          "keyPassword": "0000001B1F6A46128F678BBFD69179C9E13F96864F31411F389822D5B923677173505D90A7DA3691482AF8",
           "profile": "C:\\Users\\Noisy\\.ohos\\config\\default_HanakoMobile_A8NKObHsLVQgBN08xPB2vLk2lwFbZqVntyGFyp6mKqc=.p7b",
           "signAlg": "SHA256withECDSA",
           "storeFile": "C:\\Users\\Noisy\\.ohos\\config\\default_HanakoMobile_A8NKObHsLVQgBN08xPB2vLk2lwFbZqVntyGFyp6mKqc=.p12",
-          "storePassword": "0000001BB16744F0C6D1035941D864B76C224A327C341E2156F4BE46DCCF1BF844BEAD20F613754BA06FC5"
+          "storePassword": "0000001BFF7FAD0943D89BD38DF46926D685C7684768897432AFEC7E2B9ED8D5068B253197164A6839694D"
         }
       }
     ],
@@ -32,10 +32,21 @@
     ],
     "buildModeSet": [
       {
-        "name": "debug",
+        "name": "debug"
       },
       {
         "name": "release"
+      }
+    ],
+    "capabilities": [
+      {
+        "bundleName": "com.boki.hanako.mobile",
+        "config": [
+          {
+            "name": "Push Kit",
+            "capability": "com.huawei.service.push.base_service"
+          }
+        ]
       }
     ]
   },
