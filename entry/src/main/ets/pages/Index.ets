@@ -28,9 +28,11 @@ const KEY_BALL_Y: string = 'ball_y_ratio';
 // 白条/悬浮球吸附后中心距屏幕边缘的距离（vp：条宽 14 / 球径 52 的一半，完全贴边）
 const BALL_EDGE_INSET: number = 7;
 const BALL_EDGE_INSET_ROUND: number = 26;
-// 白条手势热区（vp，视觉层居中，热区放大便于手指按住）
+// 白条手势热区（vp，视觉层居中，热区放大便于手指按住；条形态热区收窄避免遮挡页面右缘内容）
 const BALL_HIT_W: number = 56;
+const BALL_HIT_W_BAR: number = 22;
 const BALL_HIT_H: number = 100;
+const BALL_HIT_H_BAR: number = 92;
 // 白条拖动判定阈值（vp）：超过视为拖拽，未超过视为点击打开菜单
 const BALL_DRAG_DISTANCE: number = 8;
 // 悬浮球静置时长（毫秒）：静置不动自动变形为细条吸附边缘
@@ -197,11 +199,11 @@ struct Index {
     if (w > 0 && h > 0) {
       this.screenW = this.getUIContext().px2vp(w);
       this.screenH = this.getUIContext().px2vp(h);
-      // 屏幕密度（px/vp）：用于让加载封面图标与启动窗口图标（按 256px 像素显示）视觉一致
+      // 屏幕密度（px/vp）：用于让加载封面图标与启动窗口图标（按 512px 像素显示）视觉一致
       if (this.screenW > 0) {
         const d: number = w / this.screenW;
         if (d > 0) {
-          this.iconSizeVp = Math.round(256 / d);
+          this.iconSizeVp = Math.round(512 / d);
         }
       }
     }
@@ -491,12 +493,13 @@ struct Index {
         // 会话条目操作按钮常显（电脑端靠 hover 显示，移动端无 hover）：
         // 归档/重命名按钮放大到 24x24 并始终可见，标题区让位
         `[class*="sessionRenameBtn"],[class*="sessionArchiveBtn"]{opacity:0.75!important;width:24px!important;height:24px!important;bottom:6px!important}` +
-        `[class*="sessionRenameBtn"]{right:32px!important}` +
-        `[class*="sessionArchiveBtn"]{right:6px!important}` +
+        `[class*="sessionRenameBtn"]{right:54px!important}` +
+        // 归档按钮右移避开悬浮条热区（右缘 0-22vp 是壳层手势区）
+        `[class*="sessionArchiveBtn"]{right:26px!important}` +
         `[class*="sessionRenameBtn"] svg,[class*="sessionArchiveBtn"] svg{width:15px!important;height:15px!important}` +
-        `[class*="sessionItemHeader"]{padding-right:88px!important}` +
-        // 壳注入的置顶按钮（📌）：右侧第三位，常显
-        `[class*="hanakoPinBtn"]{position:absolute!important;bottom:6px!important;right:60px!important;width:24px!important;height:24px!important;display:flex!important;align-items:center!important;justify-content:center!important;font-size:13px!important;border-radius:4px!important;z-index:2!important;opacity:0.45!important;pointer-events:auto!important}`;
+        `[class*="sessionItemHeader"]{padding-right:110px!important}` +
+        // 壳注入的置顶按钮（📌）：右侧最内位，常显
+        `[class*="hanakoPinBtn"]{position:absolute!important;bottom:6px!important;right:82px!important;width:24px!important;height:24px!important;display:flex!important;align-items:center!important;justify-content:center!important;font-size:13px!important;border-radius:4px!important;z-index:2!important;opacity:0.45!important;pointer-events:auto!important}`;
       const script: string =
         `(()=>{` +
         `try{var st=document.querySelector('style[data-hanako-shell="ui-fixes"]');if(!st){st=document.createElement('style');st.setAttribute('data-hanako-shell','ui-fixes');document.head.appendChild(st);}st.textContent=${JSON.stringify(css)};}catch(e){}` +
@@ -1222,10 +1225,11 @@ struct Index {
           .clip(true)
           .animation({ duration: 280, curve: Curve.EaseInOut })
         }
-        .width(BALL_HIT_W)
-        .height(BALL_HIT_H)
+        .width(this.isBall ? BALL_HIT_W : BALL_HIT_W_BAR)
+        .height(this.isBall ? BALL_HIT_H : BALL_HIT_H_BAR)
         .position({ x: this.ballX, y: this.ballY })
         .markAnchor({ x: '50%', y: '50%' })
+        .animation({ duration: 280, curve: Curve.EaseInOut })
         .gesture(
           GestureGroup(GestureMode.Exclusive,
             TapGesture({ count: 1 })
