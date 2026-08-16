@@ -22,8 +22,21 @@ const TAG: string = 'HanakoShell';
 const DEFAULT_URL: string = '';
 const PREFS_NAME: string = 'hanako_mobile';
 const KEY_SERVER_URL: string = 'server_url';
+// 白条位置记忆：吸附边（'L'/'R'）+ 高度比例
+const KEY_BALL_EDGE: string = 'ball_edge';
+const KEY_BALL_Y: string = 'ball_y_ratio';
+// 白条吸附后中心距屏幕边缘的距离（vp，条宽 14 的一半，完全贴边）
+const BALL_EDGE_INSET: number = 7;
+// 白条拖动判定阈值（vp）：超过视为拖拽，未超过视为点击打开菜单
+const BALL_DRAG_DISTANCE: number = 8;
 // onErrorReceive 的 ERR_ABORTED：页面导航被主动中断（如 SPA 路由），不算失败
 const ERR_ABORTED: number = -3;
+// 超时类错误码（ArkWeb 网络协议栈错误列表）：用于区分错误页文案
+const ERR_TIMED_OUT: number = -7;
+const ERR_CONNECTION_TIMED_OUT: number = -118;
+// 页面加载超时（毫秒）：服务器不可达等场景 ArkWeb 可能长时间无回调（TCP 黑洞），
+// 超时后强制进入错误页，避免一直停留在加载页
+const LOAD_TIMEOUT_MS: number = 20000;
 // 背景色轮询间隔（毫秒）
 const COLOR_POLL_MS: number = 2500;
 
@@ -34,6 +47,8 @@ struct Index {
   @State currentUrl: string = DEFAULT_URL;
   @State isLoading: boolean = true;
   @State hasError: boolean = false;
+  // 错误页提示文案（空串显示默认文案）
+  @State errHint: string = '';
   @State isChatReady: boolean = false;
   @State showSettings: boolean = false;
   @State showImgMenu: boolean = false;
@@ -44,12 +59,20 @@ struct Index {
   @State bgColor: string = '#F7F1E7';
   // 状态栏高度（vp），用于注入 CSS 让顶部横栏避让状态栏
   @State statusBarHeightVp: number = 0;
-  // 白条：固定位置（中心点 vp 坐标，右缘垂直 55%）
+  // 导航条高度（vp），用于白条拖拽纵向边界
+  @State navBarHeightVp: number = 0;
+  // 白条：固定位置（中心点 vp 坐标，吸附左/右缘，高度可拖拽）
   @State ballX: number = -1;
   @State ballY: number = -1;
+  // 白条拖动中（用于视觉反馈）
+  @State ballDragging: boolean = false;
   private screenW: number = 0;
   private screenH: number = 0;
+  // 拖拽起点（白条中心点，vp）
+  private dragOriginX: number = 0;
+  private dragOriginY: number = 0;
   private colorTimer: number = -1;
+  private loadTimer: number = -1;
   private lastBarColor: string = '';
   private pendingBarColor: string = '';
   private win: window.Window | null = null;
@@ -60,6 +83,9 @@ struct Index {
     this.watchNetwork();
     this.acquireWindow();
     this.startColorWatcher();
+    // 兜底启动加载超时计时：即使 Web 组件的 onPageBegin 因异常未触发，
+    // 20 秒后也能强制退出加载态进入错误页（onPageBegin 会正常重置计时）
+    this.startLoadTimer();
   }
 
   /** 页面每次显示（含从后台回前台、分享拉起）时立即消费分享数据 */
@@ -82,6 +108,7 @@ struct Index {
       this.netConn = null;
     }
     this.stopColorWatcher();
+    this.stopLoadTimer();
     NotificationClient.disconnect();
   }
 
@@ -126,24 +153,110 @@ struct Index {
     }
   }
 
-  /** 初始化/重算白条位置（右缘垂直 55%）。不依赖 onAreaChange，用窗口属性双保险 */
+  /**
+   * 初始化/适配白条位置。不依赖 onAreaChange，用窗口属性双保险。
+   * 首次定位：恢复记忆的吸附边与高度比例（无记忆默认右缘 55%）；
+   * 之后（旋转/窗口变化）：按原边缘与高度比例重算，保持用户拖拽的位置。
+   */
   private initBallPosition(): void {
+    let w: number = 0;
+    let h: number = 0;
     try {
       if (this.win !== null) {
         const rect = this.win.getWindowProperties().windowRect;
-        const w: number = typeof rect.width === 'number' ? rect.width : 0;
-        const h: number = typeof rect.height === 'number' ? rect.height : 0;
-        if (w > 0 && h > 0) {
-          this.screenW = this.getUIContext().px2vp(w);
-          this.screenH = this.getUIContext().px2vp(h);
-        }
+        w = typeof rect.width === 'number' ? rect.width : 0;
+        h = typeof rect.height === 'number' ? rect.height : 0;
       }
     } catch (e) {
       hilog.warn(DOMAIN, TAG, 'initBallPosition failed: %{public}s', JSON.stringify(e));
     }
+    // 尺寸变化前记录原边缘与高度比例
+    const wasInit: boolean = this.ballX >= 0 && this.ballY >= 0 && this.screenW > 0 && this.screenH > 0;
+    const wasLeft: boolean = wasInit ? this.ballX < this.screenW / 2 : false;
+    const yRatio: number = wasInit ? this.ballY / this.screenH : 0.55;
+    if (w > 0 && h > 0) {
+      this.screenW = this.getUIContext().px2vp(w);
+      this.screenH = this.getUIContext().px2vp(h);
+    }
     if (this.screenW > 0 && this.screenH > 0) {
-      this.ballX = this.screenW - 8;
-      this.ballY = this.screenH * 0.55;
+      if (wasInit) {
+        this.ballX = wasLeft ? BALL_EDGE_INSET : this.screenW - BALL_EDGE_INSET;
+        this.ballY = this.clampBallY(yRatio * this.screenH);
+      } else if (this.ballX < 0) {
+        this.restoreBallPosition();
+      }
+    }
+  }
+
+  /** 首次恢复白条位置：记忆的吸附边 + 高度比例；无记忆时默认右缘 55% */
+  private restoreBallPosition(): void {
+    let edge: string = 'R';
+    let ratio: number = 0.55;
+    try {
+      const hostCtx = this.getUIContext().getHostContext();
+      if (hostCtx !== undefined) {
+        const ctx = hostCtx as common.UIAbilityContext;
+        const store = preferences.getPreferencesSync(ctx, { name: PREFS_NAME });
+        edge = store.getSync(KEY_BALL_EDGE, 'R') as string;
+        const saved: number = store.getSync(KEY_BALL_Y, 0.55) as number;
+        if (typeof saved === 'number' && saved > 0.05 && saved < 0.95) {
+          ratio = saved;
+        }
+      }
+    } catch (e) {
+      hilog.warn(DOMAIN, TAG, 'restore ball position failed: %{public}s', JSON.stringify(e));
+    }
+    if (edge !== 'L') {
+      edge = 'R';
+    }
+    this.ballX = edge === 'L' ? BALL_EDGE_INSET : this.screenW - BALL_EDGE_INSET;
+    this.ballY = this.clampBallY(ratio * this.screenH);
+    hilog.info(DOMAIN, TAG, 'ball restored: edge=%{public}s x=%{public}d y=%{public}d', edge, this.ballX, this.ballY);
+  }
+
+  /** 白条纵向边界钳制：不藏进状态栏与导航条 */
+  private clampBallY(y: number): number {
+    const half: number = 38;
+    const minY: number = this.statusBarHeightVp + half + 8;
+    const maxY: number = this.screenH - this.navBarHeightVp - half - 8;
+    if (maxY <= minY) {
+      return this.screenH / 2;
+    }
+    return Math.min(Math.max(y, minY), maxY);
+  }
+
+  /** 拖拽松手：吸附到最近的屏幕边缘并记忆位置 */
+  private snapBall(): void {
+    if (this.screenW <= 0) {
+      return;
+    }
+    const onLeft: boolean = this.ballX < this.screenW / 2;
+    const tx: number = onLeft ? BALL_EDGE_INSET : this.screenW - BALL_EDGE_INSET;
+    const ty: number = this.clampBallY(this.ballY);
+    // 推荐写法：UIContext.animateTo（全局 animateTo 已废弃）
+    this.getUIContext().animateTo({ duration: 200, curve: Curve.EaseOut }, () => {
+      this.ballX = tx;
+      this.ballY = ty;
+    });
+    this.saveBallPosition(onLeft, ty);
+  }
+
+  /** 记忆白条位置：吸附边 + 高度比例（屏幕尺寸变化后按比例恢复） */
+  private saveBallPosition(onLeft: boolean, y: number): void {
+    try {
+      const hostCtx = this.getUIContext().getHostContext();
+      if (hostCtx === undefined) {
+        return;
+      }
+      const ctx = hostCtx as common.UIAbilityContext;
+      const store = preferences.getPreferencesSync(ctx, { name: PREFS_NAME });
+      store.putSync(KEY_BALL_EDGE, onLeft ? 'L' : 'R');
+      store.putSync(KEY_BALL_Y, this.screenH > 0 ? y / this.screenH : 0.55);
+      store.flush().catch((err: BusinessError) => {
+        hilog.warn(DOMAIN, TAG, 'flush ball pos failed: %{public}s', JSON.stringify(err));
+      });
+    } catch (e) {
+      hilog.warn(DOMAIN, TAG, 'save ball position failed: %{public}s', JSON.stringify(e));
     }
   }
 
@@ -154,7 +267,8 @@ struct Index {
       }
       const area: window.AvoidArea = this.win.getWindowAvoidArea(window.AvoidAreaType.TYPE_SYSTEM);
       this.statusBarHeightVp = this.getUIContext().px2vp(area.topRect.height);
-      hilog.info(DOMAIN, TAG, 'statusBarHeight=%{public}d vp', this.statusBarHeightVp);
+      this.navBarHeightVp = this.getUIContext().px2vp(area.bottomRect.height);
+      hilog.info(DOMAIN, TAG, 'statusBarHeight=%{public}d vp, navBarHeight=%{public}d vp', this.statusBarHeightVp, this.navBarHeightVp);
       // 页面已就绪时，用最新状态栏高度刷新注入样式（顶部横栏避让）
       if (this.isChatReady) {
         this.injectUiFixes();
@@ -526,12 +640,53 @@ struct Index {
     }
   }
 
+  /**
+   * 启动加载超时计时：服务器不可达（TCP 黑洞）等场景 ArkWeb 可能长时间无任何回调，
+   * 超时后强制进入错误页，引导用户重试或修改服务器地址，避免永远停留在加载页。
+   */
+  private startLoadTimer(): void {
+    this.stopLoadTimer();
+    this.loadTimer = setTimeout(() => {
+      this.loadTimer = -1;
+      // 已结束加载或已进入错误页：不重复处理
+      if (!this.isLoading || this.hasError) {
+        return;
+      }
+      hilog.warn(DOMAIN, TAG, 'load timeout after %{public}d ms, force error page', LOAD_TIMEOUT_MS);
+      if (this.currentUrl.length === 0) {
+        // 未配置地址：退出加载态，让首次引导层接管
+        this.isLoading = false;
+        return;
+      }
+      // 中止无响应的加载，避免后台空转
+      try {
+        this.controller.stop();
+      } catch (e) {
+        hilog.warn(DOMAIN, TAG, 'stop load failed: %{public}s', JSON.stringify(e));
+      }
+      this.isLoading = false;
+      this.hasError = true;
+      this.isChatReady = false;
+      this.errHint = '连接超时，请确认服务器已启动且手机与电脑在同一网络，稍后重试';
+    }, LOAD_TIMEOUT_MS);
+  }
+
+  private stopLoadTimer(): void {
+    if (this.loadTimer !== -1) {
+      clearTimeout(this.loadTimer);
+      this.loadTimer = -1;
+    }
+  }
+
   private reloadPage(): void {
+    this.stopLoadTimer();
     this.hasError = false;
     this.isLoading = true;
     this.isChatReady = false;
+    this.errHint = '';
     try {
       this.controller.loadUrl(this.currentUrl);
+      this.startLoadTimer();
     } catch (e) {
       hilog.warn(DOMAIN, TAG, 'reload failed: %{public}s', JSON.stringify(e));
       this.isLoading = false;
@@ -687,8 +842,12 @@ struct Index {
         .cacheMode(CacheMode.Default)
         .onPageBegin(() => {
           hilog.info(DOMAIN, TAG, 'onPageBegin url=%{public}s', this.currentUrl);
-          // 页面开始加载：清错误态，避免 reload 后白条停留在错误状态
-          this.hasError = false;
+          // 仅在非错误态下重启超时计时。
+          // 注意：不在此清除 hasError——连接失败后 ArkWeb 可能触发内部导航
+          // （内置错误页/自动重试），若清掉错误态会把用户留在白屏且无法操作。
+          if (!this.hasError) {
+            this.startLoadTimer();
+          }
         })
         .onConsole((event: OnConsoleEvent) => {
           const msg: string = event.message.getMessage();
@@ -713,8 +872,12 @@ struct Index {
           return false;
         })
         .onPageEnd(() => {
+          this.stopLoadTimer();
           this.isLoading = false;
-          this.hasError = false;
+          // 错误态锁定期间的内部导航结束（如 Chromium 内置错误页）不覆盖错误页
+          if (this.hasError) {
+            return;
+          }
           this.isChatReady = true;
           this.injectUiFixes();
           this.readPageBackground();
@@ -734,22 +897,64 @@ struct Index {
           } catch (e) {
             hilog.warn(DOMAIN, TAG, 'read error code failed: %{public}s', JSON.stringify(e));
           }
-          hilog.error(DOMAIN, TAG, 'onErrorReceive code=%{public}d', code);
+          // 子资源错误（页面内图片/接口失败）不触发整页错误页，只记日志
+          let mainFrame: boolean = true;
+          try {
+            mainFrame = event.request.isMainFrame();
+          } catch (e) {
+            hilog.warn(DOMAIN, TAG, 'read isMainFrame failed: %{public}s', JSON.stringify(e));
+          }
+          hilog.error(DOMAIN, TAG, 'onErrorReceive code=%{public}d main=%{public}s', code, String(mainFrame));
+          if (!mainFrame) {
+            return;
+          }
+          // ERR_ABORTED：导航被新导航/主动中止打断，保持加载态，
+          // 由随后到来的 onPageBegin 或超时兜底接管（避免提前关掉加载页导致白屏）
+          if (code === ERR_ABORTED) {
+            return;
+          }
+          this.stopLoadTimer();
           this.isLoading = false;
-          if (code !== ERR_ABORTED) {
-            this.hasError = true;
-            this.isChatReady = false;
+          this.hasError = true;
+          this.isChatReady = false;
+          if (code === ERR_TIMED_OUT || code === ERR_CONNECTION_TIMED_OUT) {
+            this.errHint = '连接超时，请确认服务器地址无误且手机与电脑在同一网络，稍后重试';
+          } else {
+            this.errHint = '';
           }
         })
         .onHttpErrorReceive((event) => {
           const code: number = event.response?.getResponseCode() ?? 0;
-          hilog.warn(DOMAIN, TAG, 'onHttpErrorReceive code=%{public}d', code);
-          // 401/403 属于登录态问题，页面自带登录流程，交给页面自己渲染
-          if (code >= 400 && code !== 401 && code !== 403) {
+          let mainFrame: boolean = true;
+          try {
+            mainFrame = event.request.isMainFrame();
+          } catch (e) {
+            hilog.warn(DOMAIN, TAG, 'read http isMainFrame failed: %{public}s', JSON.stringify(e));
+          }
+          hilog.warn(DOMAIN, TAG, 'onHttpErrorReceive code=%{public}d main=%{public}s', code, String(mainFrame));
+          // 仅主文档 HTTP 错误进入错误页；401/403 属于登录态问题，交给页面自身登录流程；
+          // 子资源（接口）HTTP 错误不覆盖整页
+          if (mainFrame && code >= 400 && code !== 401 && code !== 403) {
+            this.stopLoadTimer();
             this.isLoading = false;
             this.hasError = true;
             this.isChatReady = false;
+            this.errHint = '';
           }
+        })
+        .onSslErrorEventReceive((event) => {
+          hilog.warn(DOMAIN, TAG, 'onSslErrorEventReceive ssl check failed');
+          // 官方建议：SSL 校验失败时取消请求，避免中间人风险继续加载
+          try {
+            event.handler.handleCancel();
+          } catch (e) {
+            hilog.warn(DOMAIN, TAG, 'ssl handleCancel failed: %{public}s', JSON.stringify(e));
+          }
+          this.stopLoadTimer();
+          this.isLoading = false;
+          this.hasError = true;
+          this.isChatReady = false;
+          this.errHint = 'SSL 证书校验失败，请确认服务器地址（https 需使用受信任证书）';
         })
 
       // 首次引导层：未设置服务器地址时显示
@@ -829,7 +1034,8 @@ struct Index {
             .fontWeight(FontWeight.Medium)
             .fontColor('#3a3226')
             .margin({ top: 22 })
-          Text('请确认电脑已开机、Hanako 正在运行，\n且手机与电脑在同一局域网内')
+          Text(this.errHint.length > 0 ? this.errHint :
+            '请确认电脑已开机、Hanako 正在运行，\n且手机与电脑在同一局域网内')
             .fontSize(15)
             .fontColor('#8a7a5c')
             .textAlign(TextAlign.Center)
@@ -863,7 +1069,7 @@ struct Index {
         .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
       }
 
-      // 右缘白条（固定）：点击打开居中的设置菜单；菜单打开时隐藏
+      // 白条：吸附屏幕左/右边缘，可拖拽到任意高度；点击打开居中的设置菜单；菜单打开时隐藏
       if (this.isChatReady && !this.hasError && !this.showSettings) {
         Button() {
           Text('')
@@ -873,13 +1079,33 @@ struct Index {
         .height(76)
         .borderRadius(7)
         .backgroundColor('#FBF6EC')
-        .opacity(0.75)
+        .opacity(this.ballDragging ? 1.0 : 0.75)
         .position({ x: this.ballX, y: this.ballY })
         .markAnchor({ x: '50%', y: '50%' })
         .shadow({ radius: 6, color: '#22000000', offsetY: 2 })
         .onClick(() => {
           this.openSettingsPanel();
         })
+        .gesture(
+          PanGesture({ direction: PanDirection.All, distance: BALL_DRAG_DISTANCE })
+            .onActionStart(() => {
+              this.ballDragging = true;
+              this.dragOriginX = this.ballX;
+              this.dragOriginY = this.ballY;
+            })
+            .onActionUpdate((event) => {
+              this.ballX = this.dragOriginX + event.offsetX;
+              this.ballY = this.dragOriginY + event.offsetY;
+            })
+            .onActionEnd(() => {
+              this.ballDragging = false;
+              this.snapBall();
+            })
+            .onActionCancel(() => {
+              this.ballDragging = false;
+              this.snapBall();
+            })
+        )
       }
 
       // 设置菜单遮罩：点击空白关闭
@@ -1073,15 +1299,23 @@ struct Index {
       // Area 的 width/height 单位已是 vp，直接使用，不再 px2vp
       const w: number = typeof newArea.width === 'number' ? newArea.width : parseFloat(String(newArea.width));
       const h: number = typeof newArea.height === 'number' ? newArea.height : parseFloat(String(newArea.height));
+      // 尺寸变化前记录白条吸附边与高度比例，变化后按比例重算，保持用户拖拽的位置
+      const wasInit: boolean = this.ballX >= 0 && this.ballY >= 0 && this.screenW > 0 && this.screenH > 0;
+      const wasLeft: boolean = wasInit ? this.ballX < this.screenW / 2 : false;
+      const yRatio: number = wasInit ? this.ballY / this.screenH : 0.55;
       this.screenW = w;
       this.screenH = h;
-      // 固定位置：每次区域变化重算（白条右缘 55%）
-      if (w > 0 && h > 0) {
-        this.ballX = w - 8;
-        this.ballY = h * 0.55;
-      }
       // 旋转/窗口尺寸变化：横屏状态栏高度不同，重算避让值并重注入
       this.updateStatusBarHeight();
+      if (w > 0 && h > 0) {
+        if (wasInit) {
+          this.ballX = wasLeft ? BALL_EDGE_INSET : w - BALL_EDGE_INSET;
+          this.ballY = this.clampBallY(yRatio * h);
+        } else if (this.ballX < 0 || this.ballY < 0) {
+          // 窗口属性也未能定位：首次恢复（记忆位置或默认右缘 55%）
+          this.restoreBallPosition();
+        }
+      }
     })
   }
 }
