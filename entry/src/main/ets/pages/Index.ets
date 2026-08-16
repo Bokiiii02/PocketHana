@@ -30,9 +30,9 @@ const BALL_EDGE_INSET: number = 7;
 const BALL_EDGE_INSET_ROUND: number = 26;
 // 白条手势热区（vp，视觉层居中，热区放大便于手指按住；条形态热区收窄避免遮挡页面右缘内容）
 const BALL_HIT_W: number = 56;
-const BALL_HIT_W_BAR: number = 22;
+const BALL_HIT_W_BAR: number = 28;
 const BALL_HIT_H: number = 100;
-const BALL_HIT_H_BAR: number = 92;
+const BALL_HIT_H_BAR: number = 110;
 // 白条拖动判定阈值（vp）：超过视为拖拽，未超过视为点击打开菜单
 const BALL_DRAG_DISTANCE: number = 5;
 // 悬浮球静置时长（毫秒）：静置不动自动变形为细条吸附边缘
@@ -494,12 +494,12 @@ struct Index {
         // 归档/重命名按钮放大到 24x24 并始终可见，标题区让位
         `[class*="sessionRenameBtn"],[class*="sessionArchiveBtn"]{opacity:0.75!important;width:24px!important;height:24px!important;bottom:6px!important}` +
         `[class*="sessionRenameBtn"]{right:54px!important}` +
-        // 归档按钮右移避开悬浮条热区（右缘 0-22vp 是壳层手势区）
-        `[class*="sessionArchiveBtn"]{right:26px!important}` +
+        // 归档按钮右移避开悬浮条热区（右缘 0-28vp 是壳层手势区）
+        `[class*="sessionArchiveBtn"]{right:32px!important}` +
         `[class*="sessionRenameBtn"] svg,[class*="sessionArchiveBtn"] svg{width:15px!important;height:15px!important}` +
-        `[class*="sessionItemHeader"]{padding-right:110px!important}` +
+        `[class*="sessionItemHeader"]{padding-right:118px!important}` +
         // 壳注入的置顶按钮（📌）：右侧最内位，常显
-        `[class*="hanakoPinBtn"]{position:absolute!important;bottom:6px!important;right:82px!important;width:24px!important;height:24px!important;display:flex!important;align-items:center!important;justify-content:center!important;font-size:13px!important;border-radius:4px!important;z-index:2!important;opacity:0.45!important;pointer-events:auto!important}`;
+        `[class*="hanakoPinBtn"]{position:absolute!important;bottom:6px!important;right:88px!important;width:24px!important;height:24px!important;display:flex!important;align-items:center!important;justify-content:center!important;font-size:13px!important;border-radius:4px!important;z-index:2!important;opacity:0.45!important;pointer-events:auto!important}`;
       const script: string =
         `(()=>{` +
         `try{var st=document.querySelector('style[data-hanako-shell="ui-fixes"]');if(!st){st=document.createElement('style');st.setAttribute('data-hanako-shell','ui-fixes');document.head.appendChild(st);}st.textContent=${JSON.stringify(css)};}catch(e){}` +
