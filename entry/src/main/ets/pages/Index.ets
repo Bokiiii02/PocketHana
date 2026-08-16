@@ -13,6 +13,7 @@ import { window } from '@kit.ArkUI';
 import { scanBarcode } from '@kit.ScanKit';
 import { url } from '@kit.ArkTS';
 import { NotificationClient } from '../service/NotificationClient';
+import { PushBridge } from '../service/PushBridge';
 import { readShare, clearShareSync, SharePayload, ShareFileItem } from '../service/ShareBridge';
 import { saveBase64ToLibrary, copyBase64ToClipboard, shareBase64 } from '../service/ImageActions';
 
@@ -86,6 +87,8 @@ struct Index {
   @State iconSizeVp: number = 85;
   // 悬浮球静置计时器
   private idleTimer: number = -1;
+  // 服务器地址输入框控制器（面板出现时定位光标）
+  private serverInputCtrl: TextInputController = new TextInputController();
   private colorTimer: number = -1;
   private loadTimer: number = -1;
   private lastBarColor: string = '';
@@ -1010,6 +1013,10 @@ struct Index {
             NotificationClient.connect(this.currentUrl).then((ok: boolean) => {
               hilog.info(DOMAIN, TAG, 'notify ws connect: %{public}s', String(ok));
             });
+            // 上报华为推送 Token（服务端 huawei-push 插件经系统通道下发，后台冻结也能收到）
+            PushBridge.register(this.currentUrl).catch((err: BusinessError) => {
+              hilog.warn(DOMAIN, TAG, 'push register failed: %{public}s', JSON.stringify(err));
+            });
           }
           this.checkShare();
         })
@@ -1179,8 +1186,8 @@ struct Index {
       }
 
       // 悬浮球：拖动时为光感球，静置 3 秒自动变形为细条吸附边缘；点击打开设置菜单；菜单打开时隐藏。
-      // 外层透明热区（56x100）绑手势；互斥手势组显式仲裁点击/拖拽
-      if (this.isChatReady && !this.hasError && !this.showSettings) {
+      // 仅在已连接服务器（已配置地址）时显示，欢迎/首次引导界面不出现
+      if (this.isChatReady && !this.hasError && !this.showSettings && this.currentUrl.length > 0) {
         Stack() {
           // 视觉层：球/条变形（属性动画过渡）
           Stack() {
@@ -1305,14 +1312,17 @@ struct Index {
           .onClick(() => {
             this.startScan();
           })
-          TextInput({ text: this.editUrl, placeholder: 'http://主机IP:端口/mobile/' })
+          TextInput({ text: this.editUrl, placeholder: 'http://主机IP:端口/mobile/', controller: this.serverInputCtrl })
             .width('100%')
             .height(48)
             .backgroundColor('#ffffff')
             .fontSize(16)
             .textAlign(TextAlign.Start)
             .defaultFocus(true)
-            .caretPosition(0)
+            // 输入期间不重置光标；仅在面板出现时定位一次：空地址归左（默认），非空地址到末尾
+            .onAppear(() => {
+              this.serverInputCtrl.caretPosition(this.editUrl.length === 0 ? 0 : this.editUrl.length);
+            })
             .onChange((value: string) => {
               this.editUrl = value;
             })
