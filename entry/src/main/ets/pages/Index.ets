@@ -868,6 +868,17 @@ struct Index {
     if (!u.startsWith('http://') && !u.startsWith('https://')) {
       u = 'http://' + u;
     }
+    // 地址未带 /mobile/ 路径时自动补全（服务端移动端页面路径），避免误加载根路径
+    // 撞上 403 missing_credential 裸 JSON 错误
+    try {
+      const parsed: url.URL = new url.URL(u);
+      const p: string = parsed.pathname;
+      if (p === '' || p === '/') {
+        u = u.replace(/\/+$/, '') + '/mobile/';
+      }
+    } catch (e) {
+      hilog.warn(DOMAIN, TAG, 'parse url for mobile path failed: %{public}s', JSON.stringify(e));
+    }
     // 地址 origin 变化（且已有地址）：清 cookie，提示重新验证，自动回登录页
     if (this.currentUrl.length > 0 && !this.isSameOrigin(this.currentUrl, u)) {
       this.clearCookies();
@@ -986,6 +997,19 @@ struct Index {
     try {
       if (this.controller.accessBackward()) {
         this.controller.backward();
+        // 兜底：错误页（HTTP 403 JSON 等）按返回可能退到 about:blank / 空页，
+        // 检测到后自动恢复加载真实地址，避免白屏卡死
+        setTimeout(() => {
+          try {
+            const u: string = this.controller.getUrl();
+            if (u === 'about:blank' || u.length === 0) {
+              hilog.warn(DOMAIN, TAG, 'backward landed on blank page, reloading');
+              this.reloadPage();
+            }
+          } catch (e) {
+            hilog.warn(DOMAIN, TAG, 'check url after backward failed: %{public}s', JSON.stringify(e));
+          }
+        }, 400);
         return true;
       }
     } catch (e) {
@@ -1116,15 +1140,23 @@ struct Index {
             hilog.warn(DOMAIN, TAG, 'read http isMainFrame failed: %{public}s', JSON.stringify(e));
           }
           hilog.warn(DOMAIN, TAG, 'onHttpErrorReceive code=%{public}d main=%{public}s', code, String(mainFrame));
-          // 仅主文档 HTTP 错误进入错误页；401/403 属于登录态问题，交给页面自身登录流程；
-          // 子资源（接口）HTTP 错误不覆盖整页
-          if (mainFrame && code >= 400 && code !== 401 && code !== 403) {
+          // 仅主文档 HTTP 错误进入错误页。主文档 401/403/404 等（地址配置错误、
+          // 登录失效访问受保护路径等）页面自身无法渲染登录流程，必须由壳接管，
+          // 否则会裸显示服务端 JSON 且返回键退到 about:blank 白屏卡死；
+          // 页面内子资源（接口）HTTP 错误不覆盖整页（页面自会跳转登录等处理）
+          if (mainFrame && code >= 400) {
             this.stopLoadTimer();
             this.stopSplashRotate();
             this.isLoading = false;
             this.hasError = true;
             this.isChatReady = false;
-            this.errHint = '';
+            if (code === 401 || code === 403) {
+              this.errHint = '服务器拒绝了访问（登录已失效或地址有误），\n请检查服务器地址，必要时重新验证';
+            } else if (code === 404) {
+              this.errHint = '找不到该页面（404），请确认地址以 /mobile/ 结尾';
+            } else {
+              this.errHint = '';
+            }
           }
         })
         .onSslErrorEventReceive((event) => {
