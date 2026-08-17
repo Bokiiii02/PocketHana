@@ -1,7 +1,7 @@
 /*
  * Hanako 移动端壳
  * ArkWeb 加载 HanaAgent 移动端页面，提供连接错误兜底、服务器地址配置、
- * 扫码连接、右缘白条菜单与系统栏自动取色
+ * 扫码连接、右缘白条菜单；背景色恒定取启动页/封面（hanako 标志）奶油色
  */
 import { webview } from '@kit.ArkWeb';
 import { preferences } from '@kit.ArkData';
@@ -21,6 +21,21 @@ const DOMAIN: number = 0x0001;
 const TAG: string = 'HanakoShell';
 // 默认服务器地址：空，首次打开引导用户自行设置
 const DEFAULT_URL: string = '';
+// 全局统一背景色：hanako 应用标志（startIcon）背景色，加载页/首页/错误页/窗口背景一致
+const HANAKO_BG: string = '#F3ECDA';
+// 加载标语（与电脑端启动画面同源：desktop/src/locales/zh.json splash.lines，{name}=Hanako）
+const SPLASH_LINES: string[] = [
+  'Hanako 想起了那天傍晚的光',
+  '有些句子在记忆里发了芽',
+  'Ta 在回忆里找到了你的轮廓',
+  '风穿过那些旧对话',
+  '那些文字泡在时间里，变得很软',
+  'Hanako 记得你那天笑了很久',
+  '有一段记忆被你折了角',
+  'Ta 把散落的情绪重新收好',
+  'Hanako 闻到了某个下午的橘子味',
+  '那些对话还带着体温'
+];
 const PREFS_NAME: string = 'hanako_mobile';
 const KEY_SERVER_URL: string = 'server_url';
 // 白条位置记忆：吸附边（'L'/'R'）+ 高度比例
@@ -46,8 +61,8 @@ const ERR_CONNECTION_TIMED_OUT: number = -118;
 // 页面加载超时（毫秒）：服务器不可达等场景 ArkWeb 可能长时间无回调（TCP 黑洞），
 // 超时后强制进入错误页，避免一直停留在加载页
 const LOAD_TIMEOUT_MS: number = 20000;
-// 背景色轮询间隔（毫秒）
-const COLOR_POLL_MS: number = 2500;
+// 壳层例行检查间隔（毫秒）：登录态 / 分享 / 推送心跳 / 深色主题图标色
+const WATCH_POLL_MS: number = 2500;
 
 @Entry
 @Component
@@ -64,8 +79,11 @@ struct Index {
   private menuB64: string = '';
   private menuName: string = '';
   @State editUrl: string = DEFAULT_URL;
-  // 页面主背景色（系统栏 / 窗口 / 壳层 UI 统一跟随）
-  @State bgColor: string = '#F7F1E7';
+  // 壳层统一背景色（系统栏 / 窗口 / 封面 / 错误页）：恒定 = 启动页与封面取色，不随主界面变化
+  @State bgColor: string = HANAKO_BG;
+  // 加载页标语（电脑端 splash.lines 随机起始 + 3 秒轮播）
+  @State splashText: string = SPLASH_LINES[0];
+  private splashTimer: number = -1;
   // 状态栏高度（vp），用于注入 CSS 让顶部横栏避让状态栏
   @State statusBarHeightVp: number = 0;
   // 导航条高度（vp），用于白条拖拽纵向边界
@@ -89,12 +107,13 @@ struct Index {
   private idleTimer: number = -1;
   // 推送心跳节流时间戳
   private lastHeartbeatTs: number = 0;
+  // App 是否在前台（后台时 WS 通知改为弹系统通知，前台只做页面内角标）
+  private appVisible: boolean = true;
   // 服务器地址输入框控制器（面板出现时定位光标）
   private serverInputCtrl: TextInputController = new TextInputController();
-  private colorTimer: number = -1;
+  private watchTimer: number = -1;
   private loadTimer: number = -1;
-  private lastBarColor: string = '';
-  private pendingBarColor: string = '';
+  private lastThemeDark: boolean = false;
   private win: window.Window | null = null;
   private netConn: connection.NetConnection | null = null;
 
@@ -102,14 +121,65 @@ struct Index {
     this.loadServerUrl();
     this.watchNetwork();
     this.acquireWindow();
-    this.startColorWatcher();
+    this.startWatchLoop();
+    // 加载页标语：随机起始 + 3 秒轮播（电脑端启动画面同款文案）
+    this.startSplashRotate();
+    // 通知事件：前台刷新页面内未读角标；后台（App 不可见）弹系统通知
+    NotificationClient.setListener((title: string, body: string, sp: string) => {
+      hilog.info(DOMAIN, TAG, 'unread notify: %{public}s sp=%{public}s', body.slice(0, 30), sp);
+      this.pushUnreadToPage(sp);
+      if (!this.appVisible) {
+        NotificationClient.publishLocal(title, body);
+      }
+    });
+    // 前台收到华为推送（WS 遗漏时的兜底通道）：刷新未读角标
+    PushBridge.setMessageListener((title: string, content: string) => {
+      hilog.info(DOMAIN, TAG, 'push message foreground: %{public}s', content.slice(0, 30));
+      this.pushUnreadToPage('');
+    });
     // 兜底启动加载超时计时：即使 Web 组件的 onPageBegin 因异常未触发，
     // 20 秒后也能强制退出加载态进入错误页（onPageBegin 会正常重置计时）
     this.startLoadTimer();
   }
 
+  /** 把未读通知推给页面注入逻辑（页面原生未读状态驱动角标，这里只做刷新 nudge） */
+  private pushUnreadToPage(sp: string): void {
+    if (!this.isChatReady) {
+      return;
+    }
+    try {
+      const script: string = `(()=>{try{if(window.__hanakoNudgeUnread)window.__hanakoNudgeUnread();}catch(e){}})()`;
+      this.controller.runJavaScript(script).catch((err: BusinessError) => {
+        hilog.warn(DOMAIN, TAG, 'push unread failed: %{public}s', JSON.stringify(err));
+      });
+    } catch (e) {
+      hilog.warn(DOMAIN, TAG, 'pushUnreadToPage error: %{public}s', JSON.stringify(e));
+    }
+  }
+
+  /** 加载标语轮播：随机打乱顺序后从第一条开始，每 3 秒切换（电脑端同款节奏） */
+  private startSplashRotate(): void {
+    this.stopSplashRotate();
+    const lines: string[] = SPLASH_LINES.slice();
+    lines.sort(() => Math.random() - 0.5);
+    this.splashText = lines[0];
+    let i: number = 0;
+    this.splashTimer = setInterval(() => {
+      i = (i + 1) % lines.length;
+      this.splashText = lines[i];
+    }, 3000);
+  }
+
+  private stopSplashRotate(): void {
+    if (this.splashTimer !== -1) {
+      clearInterval(this.splashTimer);
+      this.splashTimer = -1;
+    }
+  }
+
   /** 页面每次显示（含从后台回前台、分享拉起）时立即消费分享数据 */
   onPageShow(): void {
+    this.appVisible = true;
     this.checkShare();
     // 回前台：通知 WS 可能已被系统挂起（鸿蒙后台限制），强制重建（内部 10 秒节流）
     if (this.currentUrl.length > 0 && this.isChatReady) {
@@ -117,6 +187,11 @@ struct Index {
         hilog.warn(DOMAIN, TAG, 'notify reconnect failed: %{public}s', JSON.stringify(err));
       });
     }
+  }
+
+  /** 页面隐藏（App 退后台/被覆盖）：后台通知改走系统通知栏 */
+  onPageHide(): void {
+    this.appVisible = false;
   }
 
   aboutToDisappear(): void {
@@ -133,9 +208,11 @@ struct Index {
       }
       this.netConn = null;
     }
-    this.stopColorWatcher();
+    this.stopWatchLoop();
     this.stopLoadTimer();
     this.stopIdleTimer();
+    this.stopSplashRotate();
+    NotificationClient.setListener(null);
     NotificationClient.disconnect();
   }
 
@@ -167,11 +244,7 @@ struct Index {
         this.win = w;
         this.updateStatusBarHeight();
         this.initBallPosition();
-        if (this.pendingBarColor.length > 0) {
-          const c: string = this.pendingBarColor;
-          this.pendingBarColor = '';
-          this.applyBarColors(c);
-        }
+        this.applyBarIcons(this.lastThemeDark);
       }).catch((err: BusinessError) => {
         hilog.warn(DOMAIN, TAG, 'getLastWindow failed: %{public}s', JSON.stringify(err));
       });
@@ -350,19 +423,17 @@ struct Index {
   }
 
   /**
-   * 应用页面主背景色：系统栏（状态栏 + 导航条）、窗口背景、壳层 UI 统一同步。
-   * 图标颜色根据背景亮度自适应（亮底深图标 / 暗底浅图标）。
+   * 系统栏图标颜色：仅按页面是否深色主题切换（亮底深图标 / 暗底浅图标）。
+   * 背景色不跟随主界面——系统栏/窗口/壳层 UI 一律保持启动页与封面的奶油色 HANAKO_BG。
    */
-  private applyBarColors(color: string): void {
+  private applyBarIcons(dark: boolean): void {
     try {
       if (this.win === null) {
-        // 窗口尚未就绪，暂存待窗口获取成功后补发
-        this.pendingBarColor = color;
         return;
       }
-      this.bgColor = color;
-      const iconColor: string = this.isLightColor(color) ? '#00000000' : '#FFFFFFFF';
-      hilog.info(DOMAIN, TAG, 'applyBarColors color=%{public}s icon=%{public}s', color, iconColor);
+      this.lastThemeDark = dark;
+      const iconColor: string = dark ? '#FFFFFFFF' : '#00000000';
+      hilog.info(DOMAIN, TAG, 'applyBarIcons dark=%{public}s', String(dark));
       // 系统栏背景保持透明，状态栏区域透出底下内容（ArkWeb 页面或窗口背景）
       this.win.setWindowSystemBarProperties({
         statusBarColor: '#00000000',
@@ -370,75 +441,43 @@ struct Index {
         statusBarContentColor: iconColor,
         navigationBarContentColor: iconColor
       });
-      this.win.setWindowBackgroundColor(color);
+      // 窗口背景恒定 = hanako 标志背景（启动页/封面同色），不随主界面变化
+      this.win.setWindowBackgroundColor(HANAKO_BG);
     } catch (e) {
-      hilog.warn(DOMAIN, TAG, 'applyBarColors failed: %{public}s', JSON.stringify(e));
+      hilog.warn(DOMAIN, TAG, 'applyBarIcons failed: %{public}s', JSON.stringify(e));
     }
-  }
-
-  /** 判断颜色是否偏亮（用于系统栏图标深浅色选择） */
-  private isLightColor(color: string): boolean {
-    let hex: string = color.trim();
-    if (hex.startsWith('#')) {
-      hex = hex.slice(1);
-    }
-    if (hex.length === 3) {
-      hex = hex.split('').map((c: string) => c + c).join('');
-    }
-    if (hex.length >= 6) {
-      const r: number = parseInt(hex.slice(0, 2), 16);
-      const g: number = parseInt(hex.slice(2, 4), 16);
-      const b: number = parseInt(hex.slice(4, 6), 16);
-      return (r * 299 + g * 587 + b * 114) / 1000 >= 150;
-    }
-    return true;
   }
 
   /**
-   * 轮询页面主背景色。
-   * 优先取 body 实际计算背景色（浏览器已解析，主题无论切在 html 还是 body 都能取到）；
-   * --bg 变量仅作兜底，并解析 var() 引用。
+   * 读取页面主题模式：仅用于系统栏图标深浅色，不参与背景色。
+   * 页面注入逻辑会按 --bg 亮度给 <html> 加/去 hanako-dark 类（见 injectUiFixes）。
    */
-  private readPageBackground(): void {
+  private readThemeDark(): void {
     try {
       const expr: string =
-        `(function(){var b='';` +
-        `var bc=getComputedStyle(document.body).backgroundColor;` +
-        `if(bc&&bc.indexOf('0, 0, 0, 0')<0&&bc!=='transparent')b=bc;` +
-        `if(!b||b==='transparent')b=getComputedStyle(document.documentElement).backgroundColor||'';` +
-        `if(b&&b.indexOf('rgb')===0){var m=b.match(/rgba?\\(\\s*(\\d+)[,\\s]+(\\d+)[,\\s]+(\\d+)/);` +
-        `if(m)b='#'+[m[1],m[2],m[3]].map(function(v){return parseInt(v).toString(16).padStart(2,'0')}).join('');}` +
-        `if(!b||b.indexOf('0, 0, 0, 0')>-1){` +
-        `var cs=getComputedStyle(document.documentElement);` +
-        `var v=(cs.getPropertyValue('--bg')||'').trim();` +
-        `if(v.indexOf('var(')===0){var nm=v.match(/var\\((--[\\w-]+)/);if(nm)v=(cs.getPropertyValue(nm[1])||'').trim();}` +
-        `if(v&&v.indexOf('rgb')===0){var m2=v.match(/rgba?\\(\\s*(\\d+)[,\\s]+(\\d+)[,\\s]+(\\d+)/);` +
-        `if(m2)v='#'+[m2[1],m2[2],m2[3]].map(function(x){return parseInt(x).toString(16).padStart(2,'0')}).join('');}` +
-        `b=v||'#F8F4ED';}` +
-        `return b;})()`;
+        `(function(){try{return document.documentElement.classList.contains('hanako-dark')?'1':'0';}` +
+        `catch(e){return '0';}})()`;
       this.controller.runJavaScript(expr).then((res: string) => {
-        const v: string = res ? res.trim() : '';
-        if (v.length > 0 && v !== this.lastBarColor) {
-          this.lastBarColor = v;
-          hilog.info(DOMAIN, TAG, 'readPageBackground -> %{public}s', v);
-          this.applyBarColors(v);
+        const dark: boolean = res !== null && res.trim() === '1';
+        if (dark !== this.lastThemeDark) {
+          this.applyBarIcons(dark);
         }
       }).catch((err: BusinessError) => {
-        hilog.warn(DOMAIN, TAG, 'readPageBackground failed: %{public}s', JSON.stringify(err));
+        hilog.warn(DOMAIN, TAG, 'readThemeDark failed: %{public}s', JSON.stringify(err));
       });
     } catch (e) {
-      hilog.warn(DOMAIN, TAG, 'readPageBackground error: %{public}s', JSON.stringify(e));
+      hilog.warn(DOMAIN, TAG, 'readThemeDark error: %{public}s', JSON.stringify(e));
     }
   }
 
-  private startColorWatcher(): void {
-    this.stopColorWatcher();
-    this.colorTimer = setInterval(() => {
-      this.readPageBackground();
+  private startWatchLoop(): void {
+    this.stopWatchLoop();
+    this.watchTimer = setInterval(() => {
+      this.readThemeDark();
       this.checkLoggedIn();
       this.checkShare();
       this.beatPushHeartbeat();
-    }, COLOR_POLL_MS);
+    }, WATCH_POLL_MS);
   }
 
   /** 前台推送心跳（20 秒节流）：告知服务端手机在线，插件跳过推送避免与 WS 通知重复 */
@@ -454,10 +493,10 @@ struct Index {
     }
   }
 
-  private stopColorWatcher(): void {
-    if (this.colorTimer !== -1) {
-      clearInterval(this.colorTimer);
-      this.colorTimer = -1;
+  private stopWatchLoop(): void {
+    if (this.watchTimer !== -1) {
+      clearInterval(this.watchTimer);
+      this.watchTimer = -1;
     }
   }
 
@@ -488,9 +527,11 @@ struct Index {
    * 3. 两侧侧边栏避让横栏；全局隐藏滚动条；工作台菜单分隔线隐藏
    * 4. 隐藏工作台「选择其他文件夹」「额外文件夹」「添加工作台以外的文件夹」选项（文本匹配）
    * 5. 输入框高度随内容/提示文字自适应（textarea scrollHeight）
-   * CSS 每次注入都更新（状态栏高度变化后重刷）；hide/fit 只初始化一次（window 标志）
+   * CSS 每次注入都更新（状态栏高度变化后重刷）；hide/fit 只初始化一次（window 标志）。
+   * 返回注入完成 Promise：加载封面在注入完成后才隐藏，避免页面白屏闪现。
    */
-  private injectUiFixes(): void {
+  private injectUiFixes(): Promise<void> {
+    let p: Promise<void> = Promise.resolve();
     try {
       const sbh: number = this.statusBarHeightVp;
       const css: string =
@@ -509,16 +550,16 @@ struct Index {
         `._folderHistoryDivider_737c7{display:none!important}` +
         `._workspaceHeader ._workspaceTitle{flex:1 1 auto!important;min-width:0!important;white-space:nowrap!important;overflow:hidden!important;text-overflow:ellipsis!important}` +
         `._workspaceHeader{padding-right:16px!important}` +
-        // 会话条目操作按钮常显（电脑端靠 hover 显示，移动端无 hover）：
-        // 归档/重命名按钮放大到 24x24 并始终可见，标题区让位
-        `[class*="sessionRenameBtn"],[class*="sessionArchiveBtn"]{opacity:0.75!important;width:24px!important;height:24px!important;bottom:6px!important}` +
-        `[class*="sessionRenameBtn"]{right:54px!important}` +
-        // 归档按钮右移避开悬浮条热区（右缘 0-28vp 是壳层手势区）
-        `[class*="sessionArchiveBtn"]{right:32px!important}` +
-        `[class*="sessionRenameBtn"] svg,[class*="sessionArchiveBtn"] svg{width:15px!important;height:15px!important}` +
-        `[class*="sessionItemHeader"]{padding-right:118px!important}` +
-        // 壳注入的置顶按钮（📌）：右侧最内位，常显
-        `[class*="hanakoPinBtn"]{position:absolute!important;bottom:6px!important;right:88px!important;width:24px!important;height:24px!important;display:flex!important;align-items:center!important;justify-content:center!important;font-size:13px!important;border-radius:4px!important;z-index:2!important;opacity:0.45!important;pointer-events:auto!important}`;
+        // 归档功能已取消：隐藏官方归档按钮（移动端无 hover 不可靠），不再注入替代按钮
+        `[class*="sessionArchiveBtn"]{display:none!important}` +
+        // 未读红点（左上角展开按钮右上角）：用属性 + 伪元素实现，避免向 React 管理的按钮插入节点。
+        // 有未读且侧栏收起时 JS 设置 data-hanako-badge=计数，CSS 伪元素渲染；空串则隐藏
+        `#tbToggleLeft[data-hanako-badge]:not([data-hanako-badge=""]):not([data-hanako-badge="0"]){position:relative!important}` +
+        `#tbToggleLeft[data-hanako-badge]:not([data-hanako-badge=""]):not([data-hanako-badge="0"])::after{content:attr(data-hanako-badge);position:absolute!important;top:2px!important;right:2px!important;min-width:15px!important;height:15px!important;padding:0 4px!important;border-radius:8px!important;background:#e5484d!important;color:#ffffff!important;font-size:9px!important;line-height:15px!important;text-align:center!important;box-sizing:border-box!important;z-index:30!important;pointer-events:none!important;font-family:sans-serif!important}` +
+        // 会话条目未读绿灯（右侧圆点）：同样用 data-hanako-unread 属性 + 伪元素，零节点插入
+        `[data-session-path][data-hanako-unread]::after{content:'';position:absolute!important;top:50%!important;right:10px!important;width:9px!important;height:9px!important;border-radius:5px!important;background:#3dbf6e!important;transform:translateY(-50%)!important;z-index:2!important;pointer-events:none!important;box-shadow:0 0 0 2px rgba(61,191,110,0.25)!important}` +
+        // 注意：不再强制 body 背景（对话界面背景随主题，仅系统栏/窗口由壳层保持封面奶油色）
+        ``;
       const script: string =
         `(()=>{` +
         `try{var st=document.querySelector('style[data-hanako-shell="ui-fixes"]');if(!st){st=document.createElement('style');st.setAttribute('data-hanako-shell','ui-fixes');document.head.appendChild(st);}st.textContent=${JSON.stringify(css)};}catch(e){}` +
@@ -537,50 +578,31 @@ struct Index {
         `const fitInput=()=>{const els=document.querySelectorAll('textarea');for(const el of els){if(el.__hanakoFit)continue;el.__hanakoFit=true;const up=()=>{el.style.height='auto';const h=el.scrollHeight;el.style.height=(h>0?h+2:44)+'px';};el.addEventListener('input',up);el.addEventListener('focus',up);up();}};` +
         `try{fitInput();new MutationObserver(fitInput).observe(document.body,{childList:true,subtree:true});}catch(e){}` +
         `}` +
-        `if(!window.__hanakoPinInit){window.__hanakoPinInit=true;` +
-        `var PIN_KEY='hanako_pinned_paths';` +
-        `var readPins=function(){try{return JSON.parse(localStorage.getItem(PIN_KEY)||'[]');}catch(e){return [];}};` +
-        `var writePins=function(p){try{localStorage.setItem(PIN_KEY,JSON.stringify(p));}catch(e){}};` +
-        `var reorderPins=function(){var pins=readPins();if(!pins.length)return;` +
-        `for(var i=0;i<pins.length;i++){var item=document.querySelector('[data-session-path="'+pins[i]+'"]');` +
-        `if(!item)continue;var list=item.parentElement;` +
-        `if(list&&list.firstElementChild!==item){list.insertBefore(item,list.firstElementChild);}}};` +
-        `var updatePinVisual=function(){var pins=readPins();` +
-        `var bs=document.querySelectorAll('[class*="hanakoPinBtn"]');` +
-        `for(var j=0;j<bs.length;j++){var p=bs[j].getAttribute('data-pin-path');` +
-        `bs[j].style.opacity=(p&&pins.indexOf(p)>-1)?'1':'0.45';}};` +
-        `var ensurePinBtns=function(){` +
-        `var items=document.querySelectorAll('[data-session-path]');` +
-        `for(var k=0;k<items.length;k++){var item=items[k];` +
-        `if(item.querySelector('[class*="hanakoPinBtn"]'))continue;` +
-        `var path=item.getAttribute('data-session-path')||'';` +
-        `var btn=document.createElement('div');` +
-        `btn.className='hanakoPinBtn';` +
-        `btn.setAttribute('data-pin-path',path);` +
-        `btn.textContent='\\u{1F4CC}';` +
-        `btn.addEventListener('click',function(e){e.preventDefault();e.stopPropagation();` +
-        `var pins=readPins();var path2=this.getAttribute('data-pin-path');` +
-        `var idx=pins.indexOf(path2);` +
-        `if(idx>-1){pins.splice(idx,1);}else{pins.unshift(path2);}` +
-        `writePins(pins);reorderPins();updatePinVisual();});` +
-        `item.appendChild(btn);}` +
-        `updatePinVisual();};` +
-        `try{ensurePinBtns();new MutationObserver(ensurePinBtns).observe(document.body,{childList:true,subtree:true});}catch(e){}` +
-        `try{reorderPins();new MutationObserver(reorderPins).observe(document.body,{childList:true,subtree:true});}catch(e){}` +
+        `if(!window.__hanakoBgInit){window.__hanakoBgInit=true;` +
+        // 背景统一：亮主题强制 body 背景 = hanako 标志背景；深色主题（--bg 亮度 <120）豁免
+        `var updBg=function(){var cs=getComputedStyle(document.documentElement);var v=(cs.getPropertyValue('--bg')||'').trim();var m=null;` +
+        `if(v.indexOf('rgb')===0){m=v.match(/rgba?\\(\\s*(\\d+)[,\\s]+(\\d+)[,\\s]+(\\d+)/);}` +
+        `var lum=255;if(m){lum=(parseInt(m[1])*299+parseInt(m[2])*587+parseInt(m[3])*114)/1000;}` +
+        `var root=document.documentElement;if(lum<120){root.classList.add('hanako-dark');}else{root.classList.remove('hanako-dark');}};` +
+        `updBg();setInterval(updBg,2500);` +
         `}` +
-        `if(!window.__hanakoBtnProbe){window.__hanakoBtnProbe=true;` +
-        `var probeReport=function(){` +
-        `var a=document.querySelector('[data-session-path]');` +
-        `if(a){var ab=a.querySelector('[class*="sessionArchiveBtn"]');var rb=a.querySelector('[class*="sessionRenameBtn"]');` +
-        `var kids=a.children;var cls=[];` +
-        `for(var c=0;c<kids.length;c++){cls.push(String(kids[c].className||kids[c].tagName));}` +
-        `console.log('[hanako-probe] item='+a.className+' archive='+(ab?ab.className:'MISSING')+' rename='+(rb?rb.className:'MISSING')+' children='+cls.join('|'));` +
-        `if(ab&&!ab.__probeHooked){ab.__probeHooked=true;` +
-        `ab.addEventListener('click',function(e){console.log('[hanako-probe] archive clicked, defaultPrevented='+e.defaultPrevented);});` +
-        `ab.addEventListener('touchstart',function(){console.log('[hanako-probe] archive touchstart');},{passive:true});}}` +
-        `else{console.log('[hanako-probe] no session item');}};` +
-        `setTimeout(probeReport,4000);` +
-        `setInterval(probeReport,15000);}` +
+        `if(!window.__hanakoUnreadInit){window.__hanakoUnreadInit=true;` +
+        // 未读红点/绿灯以页面自身的未读状态为准（data-unread-output="true"）。
+        // 只读写属性（data-hanako-badge / data-hanako-unread），CSS 伪元素渲染，
+        // 不向 React 管理的 DOM 插入节点，避免干扰页面渲染与交互。
+        `var sidebarOpen=function(){var s=document.getElementById('sidebar');return !!s&&s.className.indexOf('collapsed')===-1;};` +
+        `var refreshUnread=function(){var n=0;` +
+        `var items=document.querySelectorAll('[data-session-path]');` +
+        `for(var i=0;i<items.length;i++){var it=items[i];` +
+        `if(it.getAttribute('data-unread-output')==='true'){n++;` +
+        `if(!it.hasAttribute('data-hanako-unread')){it.setAttribute('data-hanako-unread','');}}` +
+        `else if(it.hasAttribute('data-hanako-unread')){it.removeAttribute('data-hanako-unread');}}` +
+        `var btn=document.getElementById('tbToggleLeft')||document.querySelector('.tb-toggle-left');` +
+        `if(btn){var show=n>0&&!sidebarOpen();` +
+        `btn.setAttribute('data-hanako-badge',show?(n>99?'99+':String(n)):'');}};` +
+        `window.__hanakoNudgeUnread=function(){try{refreshUnread();}catch(e){}};` +
+        `try{refreshUnread();setInterval(refreshUnread,2000);}catch(e){}` +
+        `}` +
         `if(!window.__hanakoDropHandler){window.__hanakoDropHandler=true;` +
         `window.addEventListener('drop',function(e){try{var dt=e.dataTransfer;if(!dt){return;}` +
         `var txt='';try{txt=dt.getData('text/plain')||'';}catch(x){}` +
@@ -621,6 +643,7 @@ struct Index {
         `.then(function(d){var c=d.indexOf(',');var b64=c>=0?d.slice(c+1):d;window.__hanakoImageB64=b64;` +
         `window.__hanakoImageName='hanako_image_'+Date.now()+'.png';console.log('[hanako-img] ready menu');}).catch(function(){});` +
         `}lp=null;},true);` +
+        `}` +
         `if(!window.__hanakoPasteHandler){window.__hanakoPasteHandler=true;` +
         `document.addEventListener('paste',function(e){try{` +
         `console.log('[hanako-paste] event, copyLen='+(window.__hanakoImageCopyB64||'').length);` +
@@ -633,14 +656,15 @@ struct Index {
         `if(ed){ed.focus();document.execCommand('insertHTML',false,html);}` +
         `window.__hanakoImageCopyB64='';console.log('[hanako-paste] image inserted');` +
         `}catch(err){console.log('[hanako-paste] err '+String(err));}});}` +
-        `}` +
         `})()`;
-      this.controller.runJavaScript(script).catch((err: BusinessError) => {
+      p = this.controller.runJavaScript(script).then(() => {
+      }).catch((err: BusinessError) => {
         hilog.warn(DOMAIN, TAG, 'injectUiFixes failed: %{public}s', JSON.stringify(err));
       });
     } catch (e) {
       hilog.warn(DOMAIN, TAG, 'injectUiFixes error: %{public}s', JSON.stringify(e));
     }
+    return p;
   }
 
   /** 打开居中的设置菜单 */
@@ -793,6 +817,7 @@ struct Index {
         return;
       }
       hilog.warn(DOMAIN, TAG, 'load timeout after %{public}d ms, force error page', LOAD_TIMEOUT_MS);
+      this.stopSplashRotate();
       if (this.currentUrl.length === 0) {
         // 未配置地址：退出加载态，让首次引导层接管
         this.isLoading = false;
@@ -824,6 +849,7 @@ struct Index {
     this.isLoading = true;
     this.isChatReady = false;
     this.errHint = '';
+    this.startSplashRotate();
     try {
       this.controller.loadUrl(this.currentUrl);
       this.startLoadTimer();
@@ -1013,7 +1039,7 @@ struct Index {
         })
         .onPageEnd(() => {
           this.stopLoadTimer();
-          this.isLoading = false;
+          this.stopSplashRotate();
           // 错误态锁定期间的内部导航结束（如 Chromium 内置错误页）不覆盖错误页
           if (this.hasError) {
             return;
@@ -1021,8 +1047,19 @@ struct Index {
           this.isChatReady = true;
           // 白条出现后启动静置计时：默认球态静置 3 秒自动变形为细条
           this.restartIdleTimer();
-          this.injectUiFixes();
-          this.readPageBackground();
+          // 先注入移动端修正 CSS 再隐藏加载封面，避免页面以默认白底渲染造成
+          // 「封面后白屏」闪烁；2 秒超时兜底，防止注入 Promise 挂起卡住封面
+          const injectP: Promise<void> = this.injectUiFixes();
+          const timeoutP: Promise<void> = new Promise<void>((resolve: () => void) => {
+            setTimeout(() => {
+              resolve();
+            }, 2000);
+          });
+          Promise.race([injectP, timeoutP]).then(() => {
+            this.isLoading = false;
+          }).catch(() => {
+            this.isLoading = false;
+          });
           this.checkLoggedIn();
           // 服务器可达：建立通知 WS（后台推送提醒）
           if (this.currentUrl.length > 0) {
@@ -1060,6 +1097,7 @@ struct Index {
             return;
           }
           this.stopLoadTimer();
+          this.stopSplashRotate();
           this.isLoading = false;
           this.hasError = true;
           this.isChatReady = false;
@@ -1082,6 +1120,7 @@ struct Index {
           // 子资源（接口）HTTP 错误不覆盖整页
           if (mainFrame && code >= 400 && code !== 401 && code !== 403) {
             this.stopLoadTimer();
+            this.stopSplashRotate();
             this.isLoading = false;
             this.hasError = true;
             this.isChatReady = false;
@@ -1097,6 +1136,7 @@ struct Index {
             hilog.warn(DOMAIN, TAG, 'ssl handleCancel failed: %{public}s', JSON.stringify(e));
           }
           this.stopLoadTimer();
+          this.stopSplashRotate();
           this.isLoading = false;
           this.hasError = true;
           this.isChatReady = false;
@@ -1136,7 +1176,7 @@ struct Index {
       }
 
       // 加载封面（与系统启动窗口同一图标同一背景同一尺寸，视觉无缝衔接为一个封面；
-      // 页面 onPageEnd 后自然消失，不再叠加额外的加载指示与文字）
+      // 页面 onPageEnd 后自然消失。图标下方轮播加载标语，与电脑端启动画面同款文案）
       if (this.isLoading && !this.hasError) {
         Stack() {
           // 背景层
@@ -1144,18 +1184,27 @@ struct Index {
             .width('100%')
             .height('100%')
             .backgroundColor(this.bgColor)
-          // 图标：屏幕正中心（尺寸按密度匹配启动窗口 256px 图标）
-          Image($r('app.media.startIcon'))
-            .width(this.iconSizeVp)
-            .height(this.iconSizeVp)
-            .position({ x: '50%', y: '50%' })
-            .markAnchor({ x: '50%', y: '50%' })
+          // 图标 + 标语：屏幕正中心（图标尺寸按密度匹配启动窗口 256px 图标）
+          Column({ space: 18 }) {
+            Image($r('app.media.startIcon'))
+              .width(this.iconSizeVp)
+              .height(this.iconSizeVp)
+            Text(this.splashText)
+              .fontSize(14)
+              .fontColor('#8E9196')
+              .textAlign(TextAlign.Center)
+              .maxLines(1)
+              .textOverflow({ overflow: TextOverflow.Ellipsis })
+              .padding({ left: 32, right: 32 })
+          }
+          .position({ x: '50%', y: '50%' })
+          .markAnchor({ x: '50%', y: '50%' })
         }
         .width('100%')
         .height('100%')
       }
 
-      // 连接失败兜底页（固定不透明暖纸底，确保完全覆盖对话页）
+      // 连接失败兜底页（固定不透明 hanako 标志背景，确保完全覆盖对话页）
       if (this.hasError) {
         Column() {
           Text('🌙')
@@ -1197,7 +1246,7 @@ struct Index {
         .width('100%')
         .height('100%')
         .padding({ left: 48, right: 48 })
-        .backgroundColor('#F7F1E7')
+        .backgroundColor(HANAKO_BG)
         .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
       }
 

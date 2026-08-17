@@ -1,6 +1,9 @@
 /*
  * Hanako 壳 · 后台推送提醒
- * 独立 WebSocket 连接，监听官方 notification 事件，触发系统本地通知
+ * 独立 WebSocket 连接，监听官方 notification 事件。
+ * 前台：页面内未读角标（红点/绿灯，见 Index.ets 注入逻辑）；
+ * 后台（App 不可见，WS 仍存活的短窗口）：由壳发布系统本地通知；
+ * 长时间后台/被杀：由服务端 huawei-push 插件经华为推送通道下发系统通知。
  * 说明：App 长时间后台时 WebSocket 可能被系统挂起（鸿蒙后台限制），前台/短后台有效
  */
 import { webSocket, http } from '@kit.NetworkKit';
@@ -12,18 +15,31 @@ import { hilog } from '@kit.PerformanceAnalysisKit';
 const DOMAIN: number = 0x0007;
 const TAG: string = 'HanakoNotify';
 
+/** 未读通知回调：title/body + 会话路径（可能为空串，服务端旧版本无此字段） */
+export type NotifyListener = (title: string, body: string, sessionPath: string) => void;
+
 export class NotificationClient {
   private static ws: webSocket.WebSocket | null = null;
   private static connected: boolean = false;
   private static closedByUser: boolean = false;
   private static reconnectTimer: number = -1;
   private static reconnectAttempt: number = 0;
-  private static notifySeq: number = 1;
   // 强制重连节流：10 秒内最多一次
   private static lastReconnectTs: number = 0;
+  private static listener: NotifyListener | null = null;
+  private static notifySeq: number = 1;
+  // 本地通知去重：相同标题+正文 30 秒内只弹一次（服务端可能重复广播同一条通知）
+  private static lastLocalTitle: string = '';
+  private static lastLocalBody: string = '';
+  private static lastLocalTs: number = 0;
 
   static get isConnected(): boolean {
     return NotificationClient.connected;
+  }
+
+  /** 注册未读通知回调（收到 notification 事件时触发，代替原来的系统通知弹窗） */
+  static setListener(l: NotifyListener | null): void {
+    NotificationClient.listener = l;
   }
 
   /** 建立通知 WS 连接（幂等） */
@@ -78,8 +94,12 @@ export class NotificationClient {
           if (ev['type'] === 'notification') {
             const title: string = ev['title'] !== undefined ? String(ev['title']) : 'Hanako';
             const body: string = ev['body'] !== undefined ? String(ev['body']) : '有新的消息';
-            hilog.info(DOMAIN, TAG, 'notification event received: %{public}s', body.slice(0, 40));
-            NotificationClient.publish(title, body);
+            const sp: string = ev['sessionPath'] !== undefined && ev['sessionPath'] !== null ?
+              String(ev['sessionPath']) : '';
+            hilog.info(DOMAIN, TAG, 'notification event received: %{public}s sp=%{public}s', body.slice(0, 40), sp);
+            if (NotificationClient.listener !== null) {
+              NotificationClient.listener(title, body, sp);
+            }
           }
         } catch (e) {
           hilog.warn(DOMAIN, TAG, 'notify msg parse error: %{public}s', JSON.stringify(e));
@@ -142,9 +162,21 @@ export class NotificationClient {
     await NotificationClient.connect(baseUrl);
   }
 
-  /** 发布本地通知 */
-  private static publish(title: string, body: string): void {
+  /**
+   * 发布本地系统通知（App 在后台时由 Index.ets 调用）。
+   * 相同标题+正文 30 秒去重，避免服务端重复广播造成刷屏。
+   */
+  static publishLocal(title: string, body: string): void {
     try {
+      const now: number = Date.now();
+      if (title === NotificationClient.lastLocalTitle && body === NotificationClient.lastLocalBody &&
+        now - NotificationClient.lastLocalTs < 30000) {
+        hilog.info(DOMAIN, TAG, 'local notify deduped: %{public}s', title);
+        return;
+      }
+      NotificationClient.lastLocalTitle = title;
+      NotificationClient.lastLocalBody = body;
+      NotificationClient.lastLocalTs = now;
       notificationManager.isNotificationEnabled().then((enabled: boolean) => {
         hilog.info(DOMAIN, TAG, 'notification enabled=%{public}s', String(enabled));
         if (!enabled) {
@@ -172,7 +204,7 @@ export class NotificationClient {
         hilog.warn(DOMAIN, TAG, 'isNotificationEnabled failed: %{public}s', JSON.stringify(err));
       });
     } catch (e) {
-      hilog.warn(DOMAIN, TAG, 'publish error: %{public}s', JSON.stringify(e));
+      hilog.warn(DOMAIN, TAG, 'publishLocal error: %{public}s', JSON.stringify(e));
     }
   }
 

@@ -34,7 +34,8 @@
               "entity.system.home"
             ],
             "actions": [
-              "ohos.want.action.home"
+              "ohos.want.action.home",
+              "action.ohos.push.listener"
             ]
           },
           {

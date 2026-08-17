@@ -19,17 +19,23 @@ import { window } from '@kit.ArkUI';
 import { systemShare } from '@kit.ShareKit';
 import { fileIo } from '@kit.CoreFileKit';
 import { notificationManager } from '@kit.NotificationKit';
+import { pushService, pushCommon } from '@kit.PushKit';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { writeShareFiles, writeShareText, ShareFileItem } from '../service/ShareBridge';
 import { toBase64, guessMime, detectImageType, extForType } from '../service/ShareUtil';
+import { PushBridge } from '../service/PushBridge';
 
 const DOMAIN = 0x0000;
 const SHARE_DOMAIN = 0x0008;
 const SHARE_TAG = 'HanakoShare';
+const PUSH_DOMAIN = 0x000a;
+const PUSH_TAG = 'HanakoPushMsg';
 const MAX_SHARE_BYTES: number = 20 * 1024 * 1024;
 
 export default class EntryAbility extends UIAbility {
   onCreate(want: Want, launchParam: AbilityConstant.LaunchParam): void {
+    // 必须在任何异步调用之前注册推送消息接收（官方要求，否则可能收不到消息）
+    this.registerPushReceiver();
     try {
       this.context.getApplicationContext().setColorMode(ConfigurationConstant.ColorMode.COLOR_MODE_NOT_SET);
     } catch (err) {
@@ -37,6 +43,53 @@ export default class EntryAbility extends UIAbility {
     }
     hilog.info(DOMAIN, 'testTag', '%{public}s', 'Ability onCreate');
     this.handleShareWant(want, launchParam);
+  }
+
+  /**
+   * 注册华为推送前台消息接收 + Token 更新回调：
+   * - receiveMessage('DEFAULT')：应用在前台时收到通知消息（foregroundShow=false 不弹系统通知），
+   *   转发给页面刷新未读角标（后台由系统通知栏展示，无需应用处理）。
+   * - tokenUpdate：设备跨境等场景 Push Token 变化后自动重新上报服务端。
+   */
+  private registerPushReceiver(): void {
+    try {
+      pushService.receiveMessage('DEFAULT', this, (data: pushCommon.PushPayload) => {
+        try {
+          let title: string = 'Hanako';
+          let content: string = '有新的消息';
+          const raw: string = data !== null && data !== undefined ? String(data.data || '') : '';
+          if (raw.length > 0) {
+            const j = JSON.parse(raw) as Record<string, Object>;
+            const notif: Record<string, Object> | null =
+              j['notification'] !== undefined ? j['notification'] as Record<string, Object> : null;
+            if (notif !== null) {
+              const t = notif['title'];
+              const b = notif['body'];
+              if (typeof t === 'string' && t.length > 0) {
+                title = t;
+              }
+              if (typeof b === 'string' && b.length > 0) {
+                content = b;
+              }
+            }
+          }
+          hilog.info(PUSH_DOMAIN, PUSH_TAG, 'push message: %{public}s', content.slice(0, 40));
+          PushBridge.handleForegroundMessage(title, content);
+        } catch (e) {
+          hilog.warn(PUSH_DOMAIN, PUSH_TAG, 'push message parse error: %{public}s', JSON.stringify(e));
+        }
+      });
+    } catch (e) {
+      hilog.warn(PUSH_DOMAIN, PUSH_TAG, 'receiveMessage register failed: %{public}s', JSON.stringify(e));
+    }
+    try {
+      pushService.on('tokenUpdate', this, (token: string) => {
+        hilog.info(PUSH_DOMAIN, PUSH_TAG, 'push token updated len=%{public}d', token.length);
+        PushBridge.reRegister();
+      });
+    } catch (e) {
+      hilog.warn(PUSH_DOMAIN, PUSH_TAG, 'tokenUpdate register failed: %{public}s', JSON.stringify(e));
+    }
   }
 
   /** 系统分享拉起（App 已在运行） */
@@ -148,7 +201,7 @@ export default class EntryAbility extends UIAbility {
         statusBarContentColor: '#00000000',
         navigationBarContentColor: '#00000000'
       });
-      mainWindow.setWindowBackgroundColor('#F7F1E7');
+      mainWindow.setWindowBackgroundColor('#F3ECDA');
     } catch (err) {
       hilog.error(DOMAIN, 'testTag', 'Window config failed. Cause: %{public}s', JSON.stringify(err));
     }
