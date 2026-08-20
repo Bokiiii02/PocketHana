@@ -234,6 +234,15 @@ export default class EntryAbility extends UIAbility {
   onForeground(): void {
     // Ability has brought to foreground
     hilog.info(DOMAIN, 'testTag', '%{public}s', 'Ability onForeground');
+    // 回到前台清除桌面图标角标：华为推送 badge addNum 累加后不会自动清零，
+    // 用户打开应用查看消息即视为已读，这里手动归零。
+    try {
+      notificationManager.setBadgeNumber(0).catch((err: BusinessError) => {
+        hilog.warn(DOMAIN, 'testTag', 'clear badge failed: %{public}s', JSON.stringify(err));
+      });
+    } catch (e) {
+      hilog.warn(DOMAIN, 'testTag', 'clear badge error: %{public}s', JSON.stringify(e));
+    }
   }
 
   onBackground(): void {

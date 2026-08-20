@@ -5,7 +5,7 @@
  */
 import { webview } from '@kit.ArkWeb';
 import { preferences } from '@kit.ArkData';
-import { connection } from '@kit.NetworkKit';
+import { connection, http } from '@kit.NetworkKit';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { common } from '@kit.AbilityKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
@@ -64,6 +64,57 @@ const LOAD_TIMEOUT_MS: number = 20000;
 // 壳层例行检查间隔（毫秒）：登录态 / 分享 / 推送心跳 / 深色主题图标色
 const WATCH_POLL_MS: number = 2500;
 
+/**
+ * show_card 原生卡片渲染注入脚本（runJavaScript 幂等注入，见 ensureCardHook）：
+ * mobile PWA 前端没有实现 show_card（原生 HTML 卡片）渲染，工具块的 details.code
+ * 没人消费，手机上只显示一个空壳。本脚本 hook 住 WebSocket，拦截 tool_end 事件，
+ * 提取 show_card 工具的 details.code（卡片 HTML），找到工具块 DOM 锚点，在其后插入
+ * srcdoc iframe 渲染；CSS 变量从父页面实时读取（深浅主题自适应），卡片高度由 iframe
+ * 内 ResizeObserver + postMessage 上报回填。
+ * 约束：仅覆盖实时流式（WS 通道）产生的卡片；历史消息（REST 加载，toolCalls 不含
+ * details）暂不渲染。幂等：window.__hanakoCardHookInit 标志位防重复初始化。
+ */
+const CARD_HOOK_SCRIPT: string = `(function () {
+  if (window.__hanakoCardHookInit) return;
+  window.__hanakoCardHookInit = true;
+  console.log('[hanako-card] injected');
+  // 拦截 /api/cards 的 PUT（mobile 无 studio_owner scope 必 403）：
+  // 伪造注册成功，把 code / varsCss 分片 console 输出，由壳层 onConsole 收集并接管 GET 渲染
+  var origFetch = window.fetch;
+  window.fetch = function (input, init) {
+    try {
+      var url = typeof input === 'string' ? input : (input && input.url) || '';
+      if (url.indexOf('/api/cards/') > -1) {
+        var method = ((init && init.method) || 'GET').toUpperCase();
+        if (method === 'PUT') {
+          var body = (init && init.body) || '';
+          var parsed = typeof body === 'string' ? JSON.parse(body) : body;
+          if (parsed && typeof parsed.code === 'string') {
+            var id = url.split('/api/cards/')[1].split('?')[0].split('/')[0];
+            var code = parsed.code;
+            var chunk = 6000;
+            var total = Math.ceil(code.length / chunk);
+            for (var i = 0; i < total; i++) {
+              console.log('[hanako-card-code]' + id + '|' + i + '|' + total + '|' + code.substr(i * chunk, chunk));
+            }
+            if (typeof parsed.varsCss === 'string' && parsed.varsCss.length > 0) {
+              var vc = parsed.varsCss;
+              var vt = Math.ceil(vc.length / chunk);
+              for (var j = 0; j < vt; j++) {
+                console.log('[hanako-card-vars]' + id + '|' + j + '|' + vt + '|' + vc.substr(j * chunk, chunk));
+              }
+            }
+            console.log('[hanako-card] fake put ok ' + id + ' chunks=' + total);
+            return Promise.resolve(new Response(JSON.stringify({ ok: true }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+          }
+        }
+      }
+    } catch (e) {}
+    return origFetch.apply(this, arguments);
+  };
+  console.log('[hanako-card] fetch hooked');
+})();`;
+
 @Entry
 @Component
 struct Index {
@@ -116,12 +167,25 @@ struct Index {
   private lastThemeDark: boolean = false;
   private win: window.Window | null = null;
   private netConn: connection.NetConnection | null = null;
+  // onInterceptRequest 文档级注入：预取 mobile HTML + 注入卡片 hook 后的缓存
+  private cardHtmlCache: string = '';
+  private cardPrefetching: boolean = false;
+  // 卡片 code 收集：注入脚本伪造 PUT 成功后分片 console 输出，这里拼接存储，供 GET 拦截渲染
+  private cardChunks: Map<string, string[]> = new Map();
+  private cardTotals: Map<string, number> = new Map();
+  private cardCodeStore: Map<string, string> = new Map();
+  private cardVarsStore: Map<string, string> = new Map();
+  private cardVarsChunks: Map<string, string[]> = new Map();
+  private cardVarsTotals: Map<string, number> = new Map();
 
   aboutToAppear(): void {
     this.loadServerUrl();
     this.watchNetwork();
     this.acquireWindow();
     this.startWatchLoop();
+    // 预取 mobile HTML 并注入卡片 hook（onInterceptRequest 拦截主文档时用，
+    // 保证 hook 先于页面任何 JS 执行，彻底解决自动恢复会话的 WS 竞态）
+    this.prefetchCardHtml();
     // 加载页标语：随机起始 + 3 秒轮播（电脑端启动画面同款文案）
     this.startSplashRotate();
     // 通知事件：前台刷新页面内未读角标；后台（App 不可见）弹系统通知
@@ -477,6 +541,7 @@ struct Index {
       this.checkLoggedIn();
       this.checkShare();
       this.beatPushHeartbeat();
+      this.ensureCardHook();
     }, WATCH_POLL_MS);
   }
 
@@ -843,6 +908,125 @@ struct Index {
     }
   }
 
+  /** 注入卡片 fetch hook（幂等：脚本自身带初始化标志，重复执行无害）。
+   * 注入时机三保险：onPageBegin（最早尝试）、onPageEnd（页面就绪后第一时间）、
+   * watchLoop（2.5s 周期兜底）。外置同源脚本（assets/hanako-card-hook.js）由
+   * onInterceptRequest 拦截返回，随页面加载自动执行，早于页面 bundle。 */
+  private ensureCardHook(force: boolean = false): void {
+    if (!force && !this.isChatReady) {
+      return;
+    }
+    try {
+      this.controller.runJavaScript(CARD_HOOK_SCRIPT).catch((err: BusinessError) => {
+        hilog.warn(DOMAIN, TAG, 'ensureCardHook failed: %{public}s', JSON.stringify(err));
+      });
+    } catch (e) {
+      hilog.warn(DOMAIN, TAG, 'ensureCardHook error: %{public}s', JSON.stringify(e));
+    }
+  }
+
+  /** 预取 mobile 页面 HTML，把卡片 hook 脚本注入 <head> 后缓存，供 onInterceptRequest 使用。
+   * 文档级注入的时序保证：页面 HTML 到达 ArkWeb 前脚本已就位，任何页面 JS（含 WebSocket
+   * 创建）都晚于 hook。失败静默：onPageEnd / watchLoop 的 runJavaScript 注入仍会兜底 */
+  /** 收集注入脚本分片输出的卡片数据：[hanako-card-code|vars]{id}|{index}|{total}|{chunk} */
+  private collectCardChunks(msg: string, isVars: boolean): void {
+    try {
+      const prefix: string = isVars ? '[hanako-card-vars]' : '[hanako-card-code]';
+      const body: string = msg.substring(prefix.length);
+      const sep: number = body.indexOf('|');
+      if (sep <= 0) return;
+      const id: string = body.substring(0, sep);
+      const rest: string = body.substring(sep + 1);
+      const parts: string[] = rest.split('|');
+      if (parts.length < 3) return;
+      const idx: number = parseInt(parts[0], 10);
+      const total: number = parseInt(parts[1], 10);
+      if (isNaN(idx) || isNaN(total) || total <= 0 || idx < 0 || idx >= total) return;
+      // 内容可能含 |，从第三段起全部还原
+      const chunk: string = parts.slice(2).join('|');
+      const chunksMap: Map<string, string[]> = isVars ? this.cardVarsChunks : this.cardChunks;
+      const totalsMap: Map<string, number> = isVars ? this.cardVarsTotals : this.cardTotals;
+      let arr: string[] | undefined = chunksMap.get(id);
+      if (arr === undefined) {
+        arr = new Array<string>(total);
+        chunksMap.set(id, arr);
+      }
+      arr[idx] = chunk;
+      let complete: boolean = true;
+      for (let i = 0; i < total; i++) {
+        if (arr[i] === undefined) {
+          complete = false;
+          break;
+        }
+      }
+      if (complete) {
+        const full: string = arr.join('');
+        if (isVars) {
+          this.cardVarsStore.set(id, full);
+        } else {
+          this.cardCodeStore.set(id, full);
+        }
+        chunksMap.delete(id);
+        totalsMap.delete(id);
+        hilog.info(DOMAIN, TAG, 'card %{public}s complete id=%{public}s len=%{public}d', isVars ? 'vars' : 'code', id, full.length);
+      }
+    } catch (e) {
+      hilog.warn(DOMAIN, TAG, 'collectCardChunks error: %{public}s', JSON.stringify(e));
+    }
+  }
+
+  /** 构建卡片 HTML（模仿 server/cards/card-document.ts）：http iframe 无 CSP 继承，内联脚本才能执行 */
+  private buildCardHtml(cardId: string): string {
+    const code: string = this.cardCodeStore.get(cardId) || '';
+    if (code.length === 0) {
+      return '';
+    }
+    const varsCss: string = this.cardVarsStore.get(cardId) || '';
+    // 防注入：剥掉尖括号，杜绝 </style> 逃逸（与服务端 sanitizeVarsCss 一致）
+    const safeVars: string = varsCss.replace(/[<>]/g, '');
+    const rsc: string = "(function(){var NS='hana.card-resize';var last=0;function report(){var h=document.documentElement.scrollHeight;if(h!==last){last=h;window.parent.postMessage({type:NS,height:h},'*');}}if(document.readyState==='complete')report();else window.addEventListener('load',report);new ResizeObserver(function(){report();}).observe(document.body);window.addEventListener('message',function(e){if(e.data==='hana.card-ping'){last=0;report();}});})();";
+    return '<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><style>:root{' + safeVars + '--font-serif:\'EB Garamond\',\'Noto Serif SC\',serif;--font-ui:system-ui,sans-serif;--font-mono:\'JetBrains Mono\',monospace}*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}html{background:var(--bg-card,#FBF7EE);color:var(--text,#2A2622)}body{padding:12px 16px;font-family:var(--font-serif);font-size:14px;line-height:1.65}h1{font-size:1.35rem;font-weight:500;line-height:1.25;margin:0 0 0.6em}h2{font-size:1.1rem;font-weight:500;line-height:1.3;margin:0.8em 0 0.4em;border-left:2px solid var(--accent,#537D96);padding-left:8px}h3{font-size:0.95rem;font-weight:500;line-height:1.35;margin:0.6em 0 0.3em}p{margin:0.4em 0}strong{font-weight:500;color:var(--accent,#537D96)}a{color:var(--accent,#537D96);text-decoration:none}table{width:100%;border-collapse:collapse;font-size:0.85rem;margin:0.6em 0}th{text-align:left;font-weight:500;color:var(--text-light,#4A433C);padding:6px 8px;border-bottom:1px solid var(--border,#D8CFBE)}td{padding:5px 8px;border-bottom:0.5px solid rgba(0,0,0,0.06);color:var(--text,#2A2622)}pre{background:var(--bg,#F5EFE4);border:0.5px solid var(--border,#D8CFBE);border-radius:4px;padding:8px 12px;overflow-x:auto}code{font-family:var(--font-mono);font-size:0.82rem}blockquote{border-left:2px solid var(--accent,#537D96);padding:4px 0 4px 12px;color:var(--text-muted,#6B6158);font-style:italic;margin:0.5em 0}svg{display:block;width:100%;max-width:100%}.sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap}</style></head><body>' + code + '<script>' + rsc + '</script></body></html>';
+  }
+
+  private prefetchCardHtml(): void {
+    if (this.currentUrl.length === 0 || this.cardPrefetching) {
+      return;
+    }
+    const m = /^(https?:\/\/[^/]+)/i.exec(this.currentUrl);
+    if (m === null || m.length < 2) {
+      return;
+    }
+    const target: string = m[1] + '/mobile/';
+    this.cardPrefetching = true;
+    const req = http.createHttp();
+    const hdr: Record<string, string> = {
+      'Accept': 'text/html,application/xhtml+xml',
+      'Accept-Encoding': 'identity'
+    };
+    const options: http.HttpRequestOptions = {
+      method: http.RequestMethod.GET,
+      connectTimeout: 5000,
+      readTimeout: 5000,
+      header: hdr
+    };
+    req.request(target, options).then((resp: http.HttpResponse) => {
+      if (resp.responseCode === 200 && typeof resp.result === 'string') {
+        const html: string = resp.result;
+        if (html.length > 0) {
+          // CSP script-src 'self' 禁止内联脚本，改为外置同源脚本引用（由 onInterceptRequest 拦截返回）
+          this.cardHtmlCache = html.replace(/<\/head>/i,
+            () => '<script src="./assets/hanako-card-hook.js"></script></head>');
+          hilog.info(DOMAIN, TAG, 'card html prefetched len=%{public}d', this.cardHtmlCache.length);
+        }
+      }
+    }).catch((err: BusinessError) => {
+      hilog.warn(DOMAIN, TAG, 'card html prefetch failed: %{public}s', JSON.stringify(err));
+    }).finally(() => {
+      this.cardPrefetching = false;
+      req.destroy();
+    });
+  }
+
   private reloadPage(): void {
     this.stopLoadTimer();
     this.hasError = false;
@@ -851,6 +1035,7 @@ struct Index {
     this.errHint = '';
     this.startSplashRotate();
     try {
+      this.prefetchCardHtml();
       this.controller.loadUrl(this.currentUrl);
       this.startLoadTimer();
     } catch (e) {
@@ -1030,8 +1215,52 @@ struct Index {
         .fileAccess(true)
         .imageAccess(true)
         .cacheMode(CacheMode.Default)
+        .onInterceptRequest((event: OnInterceptRequestEvent) => {
+          try {
+            const u: string = event.request.getRequestUrl();
+            // 外置卡片 hook 脚本（同源，满足 CSP script-src 'self'）
+            if (u.indexOf('/assets/hanako-card-hook.js') > -1) {
+              const r0 = new WebResourceResponse();
+              r0.setResponseData(CARD_HOOK_SCRIPT);
+              r0.setResponseEncoding('utf-8');
+              r0.setResponseMimeType('application/javascript');
+              return r0;
+            }
+            // 卡片 GET：iframe 子 frame 导航（不能要求 isMainFrame）。
+            // 注入脚本已伪造 PUT 成功并把 code 分片送过来，这里本地渲染官方卡片文档
+            if (u.indexOf('/api/cards/') > -1) {
+              const mc = /\/api\/cards\/([A-Za-z0-9_-]+)/.exec(u);
+              if (mc !== null && mc.length > 1) {
+                const cid: string = mc[1];
+                const html: string = this.buildCardHtml(cid);
+                if (html.length > 0) {
+                  const r1 = new WebResourceResponse();
+                  r1.setResponseData(html);
+                  r1.setResponseEncoding('utf-8');
+                  r1.setResponseMimeType('text/html');
+                  hilog.info(DOMAIN, TAG, 'card html served locally id=%{public}s', cid);
+                  return r1;
+                }
+              }
+            }
+            if (this.cardHtmlCache.length === 0 || !event.request.isMainFrame() || u.indexOf('/mobile/') === -1) {
+              return null;
+            }
+            const resp = new WebResourceResponse();
+            resp.setResponseData(this.cardHtmlCache);
+            resp.setResponseEncoding('utf-8');
+            resp.setResponseMimeType('text/html');
+            hilog.info(DOMAIN, TAG, 'card html injected via intercept url=%{public}s', u.slice(0, 60));
+            return resp;
+          } catch (e) {
+            return null;
+          }
+        })
         .onPageBegin(() => {
           hilog.info(DOMAIN, TAG, 'onPageBegin url=%{public}s', this.currentUrl);
+          // 尽早注入卡片 hook（页面刚加载就尝试，赶在 bundle 执行/WS 建立之前；
+          // 失败无害，onPageEnd 与 watchLoop 会兜底）
+          this.ensureCardHook(true);
           // 仅在非错误态下重启超时计时。
           // 注意：不在此清除 hasError——连接失败后 ArkWeb 可能触发内部导航
           // （内置错误页/自动重试），若清掉错误态会把用户留在白屏且无法操作。
@@ -1041,6 +1270,15 @@ struct Index {
         })
         .onConsole((event: OnConsoleEvent) => {
           const msg: string = event.message.getMessage();
+          if (msg.startsWith('[hanako-card-code]')) {
+            this.collectCardChunks(msg, false);
+          }
+          if (msg.startsWith('[hanako-card-vars]')) {
+            this.collectCardChunks(msg, true);
+          }
+          if (msg.startsWith('[hanako-card]')) {
+            hilog.info(DOMAIN, TAG, 'card diag: %{public}s', msg);
+          }
           if (msg.startsWith('[hanako-img]')) {
             hilog.info(DOMAIN, TAG, 'img event: %{public}s', msg);
             const isMenu: boolean = msg.indexOf('menu') > -1;
@@ -1074,6 +1312,7 @@ struct Index {
           // 先注入移动端修正 CSS 再隐藏加载封面，避免页面以默认白底渲染造成
           // 「封面后白屏」闪烁；2 秒超时兜底，防止注入 Promise 挂起卡住封面
           const injectP: Promise<void> = this.injectUiFixes();
+          this.ensureCardHook();
           const timeoutP: Promise<void> = new Promise<void>((resolve: () => void) => {
             setTimeout(() => {
               resolve();
