@@ -1,4 +1,4 @@
-#PocketHana
+<h1 align="center">PocketHana</h1>
 > 鸿蒙端 Hana Agent控制端应用：将Hana Agent前端特性与鸿蒙系统适配，实现边缘悬浮球、扫码连接、系统级推送 / 分享 / 拖拽等系统原生功能。
 
 ## 功能特性
