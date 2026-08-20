@@ -1,4 +1,4 @@
-<img width="3500" height="2333" alt="DSC04162" src="https://github.com/user-attachments/assets/07e181a8-3697-4751-8f2f-8d87e8cd870c" /># PocketHana
+PocketHana
 
 > 鸿蒙端 Hana Agent控制端应用：将Hana Agent前端特性与鸿蒙系统适配，实现边缘悬浮球、扫码连接、系统级推送 / 分享 / 拖拽等系统原生功能。
 
